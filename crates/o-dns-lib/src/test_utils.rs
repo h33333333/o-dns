@@ -48,11 +48,11 @@ pub fn arb_resource_data() -> impl Strategy<Value = ResourceData<'static>> {
             .prop_map(|address| ResourceData::AAAA { address })
             .boxed(),
         #[cfg(feature = "edns")]
-        hash_map(
+        proptest::option::of(hash_map(
             any::<u16>(),
             vec(any::<u8>(), 1..100).prop_map(Cow::Owned),
-            0..10,
-        )
+            1..10,
+        ))
         .prop_map(|options| ResourceData::OPT { options })
         .boxed(),
     ];

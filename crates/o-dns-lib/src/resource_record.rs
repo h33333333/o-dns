@@ -106,7 +106,7 @@ pub struct EdnsData {
     pub version: u8,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ResourceData<'a> {
     UNKNOWN {
         qtype: u16,
@@ -126,7 +126,7 @@ pub enum ResourceData<'a> {
     },
     #[cfg(feature = "edns")]
     OPT {
-        options: HashMap<u16, Cow<'a, [u8]>>,
+        options: Option<HashMap<u16, Cow<'a, [u8]>>>,
     },
 }
 
@@ -175,7 +175,7 @@ impl<'a> ResourceData<'a> {
             #[cfg(feature = "edns")]
             QueryType::OPT => {
                 let mut remaining_rd_length = rd_length;
-                let mut options = HashMap::new();
+                let mut options: Option<HashMap<_, _>> = None;
                 while remaining_rd_length != 0 {
                     let option = buf.read_u16().with_context(|| {
                         format!(
@@ -193,7 +193,9 @@ impl<'a> ResourceData<'a> {
                                 option_length, option
                             )
                         })?;
-                    options.insert(option, option_data.to_vec().into());
+                    options
+                        .get_or_insert_with(|| Default::default())
+                        .insert(option, option_data.to_vec().into());
                     remaining_rd_length -= 2 + option_length;
                 }
                 ResourceData::OPT { options }
@@ -272,32 +274,34 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
                     .context("OPT record: writing stub RDLENGTH")?;
 
                 let mut rd_length = 0;
-                options
-                    .iter()
-                    .try_for_each(|(&option_code, option_data)| {
-                        buf.write_u16(option_code).with_context(|| {
-                            format!(
-                                "OPT record: error while writing option code {}",
-                                option_code
-                            )
-                        })?;
-                        buf.write_u16(option_data.len() as u16).with_context(|| {
-                            format!(
-                                "OPT record: error while writing option length for option {}",
-                                option_code
-                            )
-                        })?;
-                        buf.write_bytes(option_data, None).with_context(|| {
-                            format!(
-                                "OPT record: error while writing option data for option {}",
-                                option_code
-                            )
-                        })?;
-                        rd_length += 2 + option_data.len();
+                if let Some(options) = options {
+                    options
+                        .iter()
+                        .try_for_each(|(&option_code, option_data)| {
+                            buf.write_u16(option_code).with_context(|| {
+                                format!(
+                                    "OPT record: error while writing option code {}",
+                                    option_code
+                                )
+                            })?;
+                            buf.write_u16(option_data.len() as u16).with_context(|| {
+                                format!(
+                                    "OPT record: error while writing option length for option {}",
+                                    option_code
+                                )
+                            })?;
+                            buf.write_bytes(option_data, None).with_context(|| {
+                                format!(
+                                    "OPT record: error while writing option data for option {}",
+                                    option_code
+                                )
+                            })?;
+                            rd_length += 2 + option_data.len();
 
-                        anyhow::Result::<()>::Ok(())
-                    })
-                    .context("OPT record: writing options")?;
+                            anyhow::Result::<()>::Ok(())
+                        })
+                        .context("OPT record: writing options")?;
+                }
 
                 // Set actual RDLENGTH
                 buf.set_u16(rdata_pos, rd_length as u16)
