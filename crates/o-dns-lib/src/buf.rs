@@ -47,6 +47,10 @@ impl<'a> ByteBuf<'a> {
         }
     }
 
+    pub fn into_inner(self) -> Cow<'a, [u8]> {
+        self.buf
+    }
+
     pub fn clear(&mut self) {
         self.pos = 0;
         self.buf.to_mut().clear();

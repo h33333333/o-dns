@@ -1,0 +1,18 @@
+[package]
+name = "o-dns"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+o-dns-lib = { workspace = true }
+
+anyhow = "1.0.89"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tokio = { version = "1.40.0", features = [
+    "net",
+    "macros",
+    "rt-multi-thread",
+    "sync",
+    "io-util",
+] }
