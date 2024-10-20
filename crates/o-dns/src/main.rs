@@ -1,9 +1,9 @@
 use anyhow::Context;
 use o_dns::util::get_empty_dns_packet;
 use o_dns::{setup_logging, State, DEFAULT_BUF_CAPACITY};
-use o_dns_lib::{ByteBuf, DnsPacket, ResourceData, ResourceRecord, ResponseCode};
+use o_dns_lib::{ByteBuf, DnsPacket, QueryType, ResourceData, ResourceRecord, ResponseCode};
 use o_dns_lib::{EncodeToBuf, FromBuf};
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -151,16 +151,35 @@ async fn handle_query(
             let question = &packet.questions[0];
             // Check if requested host is explicitly blacklisted
             if state.blacklist.read().await.contains_entry(&question.qname) {
-                // TODO: Add a 0.0.0.0 response if blacklisted
+                response_packet.header.is_authoritative = true;
+                let rdata: Option<ResourceData<'_>> = match question.query_type {
+                    // Send only A records to ANY queries if blacklisted
+                    QueryType::A | QueryType::ANY => Some(ResourceData::A {
+                        address: Ipv4Addr::UNSPECIFIED,
+                    }),
+                    QueryType::AAAA => Some(ResourceData::AAAA {
+                        address: Ipv6Addr::UNSPECIFIED,
+                    }),
+                    // Return an empty response for all other query types
+                    _ => None,
+                };
+                if let Some(rdata) = rdata {
+                    let rr = ResourceRecord::new(&question.qname, rdata, Some(180), None);
+                    response_packet.answers.push(rr);
+                    response_packet.header.answer_rr_count += 1;
+                }
             }
             if let Some(records) = state.hosts.read().await.get_entry(&question.qname) {
                 response_packet.header.is_authoritative = true;
                 records
                     .iter()
-                    .filter(|record| record.get_query_type() == question.query_type)
-                    .for_each(|record| {
+                    .filter(|rdata| match question.query_type {
+                        QueryType::ANY => true,
+                        qtype => rdata.get_query_type() == qtype,
+                    })
+                    .for_each(|rdata| {
                         let rr =
-                            ResourceRecord::new(&question.qname, record.clone(), Some(180), None);
+                            ResourceRecord::new(&question.qname, rdata.clone(), Some(180), None);
                         response_packet.answers.push(rr);
                         response_packet.header.answer_rr_count += 1;
                     });
@@ -176,6 +195,7 @@ async fn handle_query(
 
     // Encode the response packet
     let mut dst = ByteBuf::new_empty(Some(DEFAULT_BUF_CAPACITY));
+    // FIXME: account for possible truncation when using UDP
     response_packet
         .encode_to_buf(&mut dst)
         .context("error while encoding the response")?;
