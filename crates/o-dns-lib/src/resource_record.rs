@@ -200,6 +200,7 @@ impl<'a> ResourceData<'a> {
                 }
                 ResourceData::OPT { options }
             }
+            QueryType::ANY => anyhow::bail!("ANY record doesn't exist"),
         })
     }
 

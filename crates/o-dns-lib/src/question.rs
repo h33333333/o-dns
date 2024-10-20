@@ -12,6 +12,7 @@ pub enum QueryType {
     AAAA,
     #[cfg(feature = "edns")]
     OPT,
+    ANY,
 }
 
 impl From<u16> for QueryType {
@@ -23,6 +24,7 @@ impl From<u16> for QueryType {
             28 => QueryType::AAAA,
             #[cfg(feature = "edns")]
             41 => QueryType::OPT,
+            255 => QueryType::ANY,
             _ => QueryType::UNKNOWN(value),
         }
     }
@@ -37,6 +39,7 @@ impl From<QueryType> for u16 {
             QueryType::AAAA => 28,
             #[cfg(feature = "edns")]
             QueryType::OPT => 41,
+            QueryType::ANY => 255,
             QueryType::UNKNOWN(qtype) => qtype,
         }
     }
