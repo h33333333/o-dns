@@ -1,11 +1,11 @@
-use anyhow::Context;
-use o_dns::util::get_empty_dns_packet;
-use o_dns::{setup_logging, State, DEFAULT_BUF_CAPACITY};
+use anyhow::Context as _;
+use o_dns::util::{get_edns_rr, get_empty_dns_packet};
+use o_dns::{resolve_with_upstream, setup_logging, State, DEFAULT_EDNS_BUF_CAPACITY};
 use o_dns_lib::{ByteBuf, DnsPacket, QueryType, ResourceData, ResourceRecord, ResponseCode};
-use o_dns_lib::{EncodeToBuf, FromBuf};
+use o_dns_lib::{EncodeToBuf as _, FromBuf as _};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::task::JoinSet;
 
@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("error while creating a TcpListener")?;
 
-    let mut recv = vec![0; DEFAULT_BUF_CAPACITY];
+    let mut recv = vec![0; DEFAULT_EDNS_BUF_CAPACITY];
     let mut handlers: JoinSet<HandlerResult> = JoinSet::new();
     loop {
         tokio::select! {
@@ -136,14 +136,22 @@ async fn handle_query(
     parsed_packet: anyhow::Result<DnsPacket<'static>>,
     state: Arc<State>,
 ) -> anyhow::Result<Vec<u8>> {
-    let include_edns = parsed_packet
-        .as_ref()
-        .is_ok_and(|packet| packet.edns.is_some());
+    // Use the smallest EDNS buf size from the requestor's and resolver's buf sizes if EDNS was requested
+    let edns_buf_length = parsed_packet.as_ref().ok().and_then(|packet| {
+        packet.edns.and_then(|idx| {
+            packet
+                .additionals
+                .get(idx)
+                .and_then(ResourceRecord::get_edns_data)
+                .map(|data| data.udp_payload_size.min(DEFAULT_EDNS_BUF_CAPACITY))
+        })
+    });
+
     // Create an empty response packet
     let mut response_packet = get_empty_dns_packet(
         None,
         parsed_packet.as_ref().ok().map(|packet| &packet.header),
-        include_edns,
+        edns_buf_length,
     );
 
     if let Ok(packet) = parsed_packet.as_ref() {
@@ -184,7 +192,44 @@ async fn handle_query(
                         response_packet.header.answer_rr_count += 1;
                     });
             } else {
-                // TODO: forward request to the configured upstream resolver
+                // TODO: can cloning be avoided?
+                match resolve_with_upstream(packet.clone(), state.upstream_resolver).await {
+                    Ok((mut upstream_response, _)) => {
+                        match upstream_response.edns {
+                            Some(idx) => {
+                                // The requestor doesn't support EDNS
+                                if edns_buf_length.is_none() {
+                                    // Remove the OPT RR
+                                    upstream_response.additionals.remove(idx);
+                                    upstream_response.header.additional_rr_count -= 1;
+                                } else {
+                                    if let Some(edns_record) =
+                                        upstream_response.additionals.get_mut(idx)
+                                    {
+                                        // Set the EDNS buffer size to the correct one for this resolver
+                                        edns_record.class = DEFAULT_EDNS_BUF_CAPACITY as u16
+                                    }
+                                }
+                            }
+                            None => {
+                                // Add an OPT RR only if requestor supports EDNS
+                                if let Some(buf_length) = edns_buf_length {
+                                    let edns_idx = upstream_response.additionals.len();
+                                    let edns_record = get_edns_rr(buf_length as u16, None);
+                                    upstream_response.additionals.push(edns_record);
+                                    upstream_response.header.additional_rr_count += 1;
+                                    upstream_response.edns = Some(edns_idx);
+                                }
+                            }
+                        }
+                        // Forward the upstream response to the requestor
+                        response_packet = upstream_response;
+                    }
+                    Err(e) => {
+                        response_packet.header.response_code = ResponseCode::ServerFailure;
+                        tracing::debug!(resolver = ?state.upstream_resolver, "Error while forwarding a request to the upstream resolver: {}", e);
+                    }
+                }
             }
         } else {
             response_packet.header.response_code = ResponseCode::FormatError;
@@ -193,8 +238,16 @@ async fn handle_query(
         response_packet.header.response_code = ResponseCode::FormatError;
     };
 
+    // Add original questions to the response if possible and wasn't done before
+    if response_packet.questions.is_empty() {
+        if let Ok(packet) = parsed_packet.as_ref() {
+            response_packet.questions = packet.questions.clone();
+            response_packet.header.question_count = packet.header.question_count;
+        }
+    }
+
     // Encode the response packet
-    let mut dst = ByteBuf::new_empty(Some(DEFAULT_BUF_CAPACITY));
+    let mut dst = ByteBuf::new_empty(Some(DEFAULT_EDNS_BUF_CAPACITY));
     // FIXME: account for possible truncation when using UDP
     response_packet
         .encode_to_buf(&mut dst)
