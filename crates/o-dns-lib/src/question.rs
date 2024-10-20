@@ -45,7 +45,7 @@ impl From<QueryType> for u16 {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Question<'a> {
     pub qname: Cow<'a, str>,
     pub query_type: QueryType,

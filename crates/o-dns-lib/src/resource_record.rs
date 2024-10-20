@@ -10,7 +10,7 @@ use anyhow::Context;
 
 use crate::{ByteBuf, EncodeToBuf, FromBuf, QueryType};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ResourceRecord<'a> {
     pub name: Cow<'a, str>,
     pub class: u16,

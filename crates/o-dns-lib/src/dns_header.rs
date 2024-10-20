@@ -62,7 +62,7 @@ impl From<u8> for ResponseCode {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Eq, Default, Clone)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub struct DnsHeader {
     /// Unique ID of this request.

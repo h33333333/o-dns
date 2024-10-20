@@ -17,7 +17,7 @@ use anyhow::Context;
 use core::str;
 use std::collections::HashMap;
 
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Eq, Default, Clone)]
 pub struct DnsPacket<'a> {
     pub header: DnsHeader,
     #[cfg(feature = "edns")]

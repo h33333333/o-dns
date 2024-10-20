@@ -1,5 +1,10 @@
 use core::str;
-use std::{borrow::Cow, collections::HashMap, io::Write, ops::Deref};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    io::Write,
+    ops::{Deref, DerefMut},
+};
 
 use anyhow::Context;
 
@@ -32,10 +37,23 @@ impl<'a> Deref for ByteBuf<'a> {
     }
 }
 
+impl<'a> DerefMut for ByteBuf<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.buf.to_mut()
+    }
+}
+
 impl<'a> ByteBuf<'a> {
     pub fn new(src: &impl AsRef<[u8]>) -> ByteBuf<'_> {
         ByteBuf {
             buf: Cow::Borrowed(src.as_ref()),
+            pos: 0,
+        }
+    }
+
+    pub fn new_from_vec(src: Vec<u8>) -> ByteBuf<'static> {
+        ByteBuf {
+            buf: Cow::Owned(src),
             pos: 0,
         }
     }
@@ -51,9 +69,20 @@ impl<'a> ByteBuf<'a> {
         self.buf
     }
 
+    pub fn get_inner_mut(&mut self) -> &mut Vec<u8> {
+        self.buf.to_mut()
+    }
+
     pub fn clear(&mut self) {
-        self.pos = 0;
         self.buf.to_mut().clear();
+    }
+
+    pub fn reset_pos(&mut self) {
+        self.pos = 0;
+    }
+
+    pub fn resize(&mut self, new_len: usize) {
+        self.buf.to_mut().resize(new_len, 0);
     }
 
     pub fn read_u8(&mut self) -> anyhow::Result<u8> {
