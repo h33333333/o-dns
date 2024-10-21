@@ -196,7 +196,7 @@ impl<'a> ResourceData<'a> {
                     options
                         .get_or_insert_with(|| Default::default())
                         .insert(option, option_data.to_vec().into());
-                    remaining_rd_length -= 2 + option_length;
+                    remaining_rd_length -= 4 + option_length;
                 }
                 ResourceData::OPT { options }
             }
@@ -297,7 +297,7 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
                                     option_code
                                 )
                             })?;
-                            rd_length += 2 + option_data.len();
+                            rd_length += 4 + option_data.len();
 
                             anyhow::Result::<()>::Ok(())
                         })
