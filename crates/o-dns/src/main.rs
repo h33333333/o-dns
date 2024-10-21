@@ -1,6 +1,9 @@
 use anyhow::Context as _;
 use o_dns::util::{get_edns_rr, get_empty_dns_packet};
-use o_dns::{resolve_with_upstream, setup_logging, State, DEFAULT_EDNS_BUF_CAPACITY};
+use o_dns::{
+    resolve_with_upstream, setup_logging, State, DEFAULT_EDNS_BUF_CAPACITY,
+    MAX_STANDARD_DNS_MSG_SIZE,
+};
 use o_dns_lib::{ByteBuf, DnsPacket, QueryType, ResourceData, ResourceRecord, ResponseCode};
 use o_dns_lib::{EncodeToBuf as _, FromBuf as _};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -89,7 +92,7 @@ async fn handle_udp_connection(
     state: Arc<State>,
 ) -> HandlerResult {
     tracing::debug!("handling UDP connection");
-    let response = handle_query(parsed_packet, state)
+    let response = handle_query(parsed_packet, state, false)
         .await
         .context("error while handling the query")?;
     if let Err(e) = socket.send_to(&response, from).await {
@@ -108,7 +111,7 @@ async fn handle_tcp_connection(
     state: Arc<State>,
 ) -> HandlerResult {
     tracing::debug!("handling TCP connection");
-    let response = handle_query(parsed_packet, state)
+    let response = handle_query(parsed_packet, state, true)
         .await
         .context("error while handling the query")?;
     if let Err(e) = stream
@@ -135,6 +138,7 @@ async fn handle_tcp_connection(
 async fn handle_query(
     parsed_packet: anyhow::Result<DnsPacket<'static>>,
     state: Arc<State>,
+    is_using_tcp: bool,
 ) -> anyhow::Result<Vec<u8>> {
     // Use the smallest EDNS buf size from the requestor's and resolver's buf sizes if EDNS was requested
     let edns_buf_length = parsed_packet.as_ref().ok().and_then(|packet| {
@@ -246,9 +250,13 @@ async fn handle_query(
         }
     }
 
+    // UDP: truncate the response if the requestor's buffer is too small
+    if !is_using_tcp {
+        response_packet.minimize_to_size(edns_buf_length.unwrap_or(MAX_STANDARD_DNS_MSG_SIZE));
+    }
+
     // Encode the response packet
     let mut dst = ByteBuf::new_empty(Some(DEFAULT_EDNS_BUF_CAPACITY));
-    // FIXME: account for possible truncation when using UDP
     response_packet
         .encode_to_buf(&mut dst)
         .context("error while encoding the response")?;
