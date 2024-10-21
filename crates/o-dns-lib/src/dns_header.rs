@@ -194,6 +194,11 @@ impl EncodeToBuf for DnsHeader {
 
         Ok(())
     }
+
+    fn get_encoded_size(&self) -> usize {
+        2 /* ID */ + 2 /* flags */ + 2 /* question count */
+            + 2 /* answer count */ + 2 /* authority count */ + 2 /* additional count */
+    }
 }
 
 #[cfg(test)]

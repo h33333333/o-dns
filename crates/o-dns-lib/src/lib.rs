@@ -5,6 +5,7 @@ mod buf;
 mod dns_header;
 mod question;
 mod resource_record;
+mod utils;
 
 pub use buf::{ByteBuf, EncodeToBuf, FromBuf};
 pub use dns_header::{DnsHeader, QueryOpcode, ResponseCode};
@@ -138,6 +139,23 @@ impl<'a> EncodeToBuf for DnsPacket<'a> {
     fn encode_to_buf(&self, buf: &mut ByteBuf) -> anyhow::Result<()> {
         let mut label_cache = HashMap::new();
         self.encode_to_buf_with_cache(buf, Some(&mut label_cache))
+    }
+
+    fn get_encoded_size(&self) -> usize {
+        let mut size = self.header.get_encoded_size();
+        self.questions
+            .iter()
+            .for_each(|question| size += question.get_encoded_size());
+        self.answers
+            .iter()
+            .for_each(|rr| size += rr.get_encoded_size());
+        self.authorities
+            .iter()
+            .for_each(|rr| size += rr.get_encoded_size());
+        self.additionals
+            .iter()
+            .for_each(|rr| size += rr.get_encoded_size());
+        size
     }
 }
 

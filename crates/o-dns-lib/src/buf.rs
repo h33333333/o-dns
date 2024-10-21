@@ -22,6 +22,8 @@ pub trait EncodeToBuf {
     fn encode_to_buf(&self, buf: &mut ByteBuf) -> anyhow::Result<()> {
         self.encode_to_buf_with_cache(buf, None)
     }
+
+    fn get_encoded_size(&self) -> usize;
 }
 
 pub struct ByteBuf<'a> {

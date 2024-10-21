@@ -1,4 +1,4 @@
-use crate::{ByteBuf, EncodeToBuf, FromBuf};
+use crate::{utils::get_max_encoded_qname_size, ByteBuf, EncodeToBuf, FromBuf};
 use anyhow::Context;
 use std::{borrow::Cow, collections::HashMap};
 
@@ -95,6 +95,10 @@ impl<'a> EncodeToBuf for Question<'a> {
         buf.write_u16(1).context("writing QCLASS")?;
 
         Ok(())
+    }
+
+    fn get_encoded_size(&self) -> usize {
+        get_max_encoded_qname_size(&self.qname) + 2 /* QTYPE */ + 2 /* CLASS */
     }
 }
 

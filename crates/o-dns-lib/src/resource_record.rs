@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::Context;
 
-use crate::{ByteBuf, EncodeToBuf, FromBuf, QueryType};
+use crate::{utils::get_max_encoded_qname_size, ByteBuf, EncodeToBuf, FromBuf, QueryType};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ResourceRecord<'a> {
@@ -93,6 +93,10 @@ impl<'a> EncodeToBuf for ResourceRecord<'a> {
             .context("writing RDATA")?;
 
         Ok(())
+    }
+
+    fn get_encoded_size(&self) -> usize {
+        get_max_encoded_qname_size(&self.name) + 2 /* CLASS */ + 4 /* TTL */ + self.resource_data.get_encoded_size()
     }
 }
 
@@ -311,6 +315,36 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
         };
 
         Ok(())
+    }
+
+    fn get_encoded_size(&self) -> usize {
+        let mut size = 2 /* RDLENGTH */;
+        match self {
+            ResourceData::UNKNOWN { rdata, .. } => {
+                size += rdata.len();
+            }
+            ResourceData::A { .. } => {
+                size += 4 /* Ipv4Addr */;
+            }
+            ResourceData::NS { ns_domain_name } => {
+                size += get_max_encoded_qname_size(ns_domain_name);
+            }
+            ResourceData::CNAME { cname } => {
+                size += get_max_encoded_qname_size(cname);
+            }
+            ResourceData::AAAA { .. } => {
+                size += 16 /* Ipv6Addr */;
+            }
+            #[cfg(feature = "edns")]
+            ResourceData::OPT { options } => {
+                options.iter().for_each(|options| {
+                    options.values().for_each(|option| {
+                        size += 2 /* option code */ + 2 /* option length */ + option.len();
+                    })
+                });
+            }
+        }
+        size
     }
 }
 
