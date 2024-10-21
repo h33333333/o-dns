@@ -34,6 +34,76 @@ impl<'a> DnsPacket<'a> {
     pub fn new() -> Self {
         DnsPacket::default()
     }
+
+    pub fn minimize_to_size(&mut self, max_size: usize) {
+        let mut current_size = self.header.get_encoded_size();
+
+        #[cfg(feature = "edns")]
+        if let Some(opt_rr) = self.edns.and_then(|idx| self.additionals.get_mut(idx)) {
+            if current_size + opt_rr.get_encoded_size() > max_size {
+                // If OPT RR is too big, remove all options and send only the most minimal response
+                opt_rr.resource_data = ResourceData::OPT { options: None };
+                self.header.truncation = true;
+            }
+            // EDNS OPT RR must always be included
+            current_size += opt_rr.get_encoded_size();
+        }
+
+        // We must always include questions in the response
+        self.questions.retain(|question| {
+            let question_size = question.get_encoded_size();
+            if current_size + question_size <= max_size {
+                current_size += question_size;
+                true // Keep this question
+            } else {
+                self.header.truncation = true;
+                false // Remove this question
+            }
+        });
+        self.header.question_count = self.questions.len() as u16;
+
+        self.answers.retain(|rr| {
+            let rr_size = rr.get_encoded_size();
+            if current_size + rr_size > max_size {
+                self.header.truncation = true;
+                true
+            } else {
+                current_size += rr_size;
+                false
+            }
+        });
+        self.header.answer_rr_count = self.answers.len() as u16;
+
+        self.authorities.retain(|rr| {
+            let rr_size = rr.get_encoded_size();
+            if current_size + rr_size > max_size {
+                self.header.truncation = true;
+                true
+            } else {
+                current_size += rr_size;
+                false
+            }
+        });
+        self.header.authority_rr_count = self.authorities.len() as u16;
+
+        self.additionals.retain(|rr| {
+            #[cfg(feature = "edns")]
+            // OPT RR's size is already accounted for, so we can retain it as is
+            if rr.resource_data.get_query_type() == QueryType::OPT {
+                return true;
+            }
+
+            let rr_size = rr.get_encoded_size();
+            if current_size + rr_size > max_size {
+                self.header.truncation = true;
+                true
+            } else {
+                current_size += rr_size;
+                false
+            }
+        });
+        self.header.additional_rr_count = self.additionals.len() as u16;
+    }
 }
 
 impl FromBuf for DnsPacket<'_> {
