@@ -109,7 +109,7 @@ impl<'a> EncodeToBuf for DnsPacket<'a> {
             if max_size.is_some_and(|max_size| opt_rr_size + dns_packet_encoded_size > max_size) {
                 anyhow::bail!("max size is too low: can't fit OPT RR");
             }
-            // Account for edns size, as it should always be present
+            // Account for OPT RR size, as it should always be present
             dns_packet_encoded_size += opt_rr_size;
         }
 
@@ -240,7 +240,7 @@ impl<'a> EncodeToBuf for DnsPacket<'a> {
                 .context("updating authority RR count")?;
             // Update additional RR count
             buf.set_u16(dns_header_pos + 10, header.additional_rr_count)
-                .context("updating addditional RR count")?;
+                .context("updating additional RR count")?;
         }
 
         Ok(dns_packet_encoded_size)
