@@ -5,7 +5,8 @@ use std::{
 
 use prop::strategy::Union;
 #[cfg(feature = "edns")]
-use proptest::collection::{hash_map, vec};
+use proptest::collection::hash_map;
+use proptest::collection::vec;
 use proptest::prelude::*;
 
 use crate::{QueryType, Question, ResourceData, ResourceRecord};
@@ -18,7 +19,6 @@ prop_compose! {
 
 prop_compose! {
     pub fn arb_resource_record()(name in arb_qname(), resource_data in arb_resource_data(), class: u16, ttl: u32) -> ResourceRecord<'static> {
-        dbg!(&resource_data);
         ResourceRecord { name, class, ttl, resource_data }
     }
 }
