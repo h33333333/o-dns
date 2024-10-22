@@ -254,6 +254,8 @@ impl<'a> EncodeToBuf for DnsPacket<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
     use super::*;
     use prop::collection::vec;
     use proptest::prelude::*;
@@ -344,6 +346,28 @@ mod tests {
             .boxed()
     }
 
+    fn get_empty_dns_packet(id: u16) -> DnsPacket<'static> {
+        let mut dns_packet = DnsPacket::new();
+        dns_packet.header.id = id;
+        dns_packet.header.is_response = true;
+        dns_packet.header.is_authoritative = true;
+        dns_packet.header.recursion_desired = true;
+        dns_packet.header.recursion_available = true;
+        dns_packet.header.z = [true, true, true];
+        dns_packet
+    }
+
+    fn assert_common_dns_header_fields(h1: &DnsHeader, h2: &DnsHeader) {
+        assert_eq!(h1.id, h2.id);
+        assert_eq!(h1.is_response, h2.is_response);
+        assert_eq!(h1.opcode, h2.opcode);
+        assert_eq!(h1.is_authoritative, h2.is_authoritative);
+        assert_eq!(h1.recursion_desired, h2.recursion_desired);
+        assert_eq!(h1.recursion_available, h2.recursion_available);
+        assert_eq!(h1.z, h2.z);
+        assert_eq!(h1.response_code, h2.response_code);
+    }
+
     proptest! {
         #[test]
         fn dns_packet_roundtrip(dns_packet in arb_dns_packet()) {
@@ -353,5 +377,276 @@ mod tests {
             let roundtripped_dns_packet = DnsPacket::from_buf(&mut buf).expect("shouldn't have failed");
             prop_assert_eq!(dns_packet, roundtripped_dns_packet, "DnsPacket roundtrip test failed");
         }
+    }
+
+    #[should_panic(expected = "max size is too low: can't fit DNS header")]
+    #[test]
+    fn dns_packet_header_truncation_low_size() {
+        let dns_packet = get_empty_dns_packet(10);
+
+        let mut buf = ByteBuf::new_empty(None);
+        dns_packet
+            // Header requires 12 bytes
+            .encode_to_buf(&mut buf, Some(0))
+            .unwrap();
+    }
+
+    #[test]
+    fn dns_packet_question_truncation() {
+        let mut dns_packet = get_empty_dns_packet(10);
+        // Add counts
+        dns_packet.header.question_count = 1;
+        // Add questions
+        dns_packet
+            .questions
+            .push(Question::new("test.com", QueryType::A));
+
+        let mut buf = ByteBuf::new_empty(None);
+        // 12 bytes are enough only for the header
+        let encoded_size = dns_packet
+            .encode_to_buf(&mut buf, Some(12))
+            .expect("shouldn't have failed");
+        // Should be exactly 12 bytes in size
+        assert_eq!(encoded_size, 12);
+        let parsed_packet = DnsPacket::from_buf(&mut buf).expect("shouldn't have failed");
+        // Check that header was correctly handled during truncation
+        assert_common_dns_header_fields(&dns_packet.header, &parsed_packet.header);
+        // Should've been truncated
+        assert!(parsed_packet.header.truncation);
+        assert_eq!(parsed_packet.header.question_count, 0);
+        assert!(parsed_packet.questions.is_empty());
+    }
+
+    #[test]
+    fn dns_packet_answer_truncation() {
+        let mut dns_packet = get_empty_dns_packet(10);
+        // Add counts
+        dns_packet.header.question_count = 1;
+        dns_packet.header.answer_rr_count = 1;
+        // Add questions
+        dns_packet
+            .questions
+            .push(Question::new("test.com", QueryType::A));
+        // Add answers
+        dns_packet.answers.push(ResourceRecord::new(
+            "test.com",
+            ResourceData::A {
+                address: Ipv4Addr::LOCALHOST,
+            },
+            Some(16),
+            None,
+        ));
+
+        let mut buf = ByteBuf::new_empty(None);
+        let encoded_size = dns_packet
+            // 12 /* header */ + 14 /* question */
+            .encode_to_buf(&mut buf, Some(26))
+            .expect("shouldn't have failed");
+        // Should be exactly 26 bytes in size
+        assert_eq!(encoded_size, 26);
+        let parsed_packet = DnsPacket::from_buf(&mut buf).expect("shouldn't have failed");
+        // Check that header was correctly handled during truncation
+        assert_common_dns_header_fields(&dns_packet.header, &parsed_packet.header);
+        // Should've been truncated
+        assert!(parsed_packet.header.truncation);
+        assert_eq!(parsed_packet.header.question_count, 1);
+        assert_eq!(parsed_packet.questions, dns_packet.questions);
+        assert_eq!(parsed_packet.header.answer_rr_count, 0);
+        assert!(parsed_packet.answers.is_empty());
+    }
+
+    #[test]
+    fn dns_packet_authority_truncation() {
+        let mut dns_packet = get_empty_dns_packet(10);
+        // Add counts
+        dns_packet.header.question_count = 1;
+        dns_packet.header.answer_rr_count = 1;
+        dns_packet.header.authority_rr_count = 1;
+        // Add questions
+        dns_packet
+            .questions
+            .push(Question::new("test.com", QueryType::A));
+        // Add answers
+        dns_packet.answers.push(ResourceRecord::new(
+            "test.com",
+            ResourceData::A {
+                address: Ipv4Addr::LOCALHOST,
+            },
+            Some(16),
+            None,
+        ));
+        // Add authority RRs
+        dns_packet.authorities.push(dns_packet.answers[0].clone());
+
+        let mut buf = ByteBuf::new_empty(None);
+        let encoded_size = dns_packet
+            // 12 /* header */ + 14 /* question */ + 16 /* answer RR */
+            .encode_to_buf(&mut buf, Some(42))
+            .expect("shouldn't have failed");
+        // Should be exactly 42 bytes in size
+        assert_eq!(encoded_size, 42);
+        let parsed_packet = DnsPacket::from_buf(&mut buf).expect("shouldn't have failed");
+        // Check that header was correctly handled during truncation
+        assert_common_dns_header_fields(&dns_packet.header, &parsed_packet.header);
+        // Should've been truncated
+        assert!(parsed_packet.header.truncation);
+        assert_eq!(parsed_packet.header.question_count, 1);
+        assert_eq!(parsed_packet.questions, dns_packet.questions);
+        assert_eq!(parsed_packet.header.answer_rr_count, 1);
+        assert_eq!(parsed_packet.answers, dns_packet.answers);
+        assert_eq!(parsed_packet.header.authority_rr_count, 0);
+        assert!(parsed_packet.authorities.is_empty());
+    }
+
+    #[test]
+    fn dns_packet_additional_truncation() {
+        let mut dns_packet = get_empty_dns_packet(10);
+        // Add counts
+        dns_packet.header.question_count = 1;
+        dns_packet.header.answer_rr_count = 1;
+        dns_packet.header.authority_rr_count = 1;
+        dns_packet.header.additional_rr_count = 1;
+        // Add questions
+        dns_packet
+            .questions
+            .push(Question::new("test.com", QueryType::A));
+        // Add answers
+        dns_packet.answers.push(ResourceRecord::new(
+            "test.com",
+            ResourceData::A {
+                address: Ipv4Addr::LOCALHOST,
+            },
+            Some(16),
+            None,
+        ));
+        // Add authority RRs
+        dns_packet.authorities.push(dns_packet.answers[0].clone());
+        // Add additional RR
+        dns_packet.additionals.push(dns_packet.answers[0].clone());
+
+        let mut buf = ByteBuf::new_empty(None);
+        let encoded_size = dns_packet
+            // 12 /* header */ + 14 /* question */ + 16 /* answer RR */ 16 /* additional RR */
+            .encode_to_buf(&mut buf, Some(58))
+            .expect("shouldn't have failed");
+        // Should be exactly 58 bytes in size
+        assert_eq!(encoded_size, 58);
+        let parsed_packet = DnsPacket::from_buf(&mut buf).expect("shouldn't have failed");
+        // Check that header was correctly handled during truncation
+        assert_common_dns_header_fields(&dns_packet.header, &parsed_packet.header);
+        // Should've been truncated
+        assert!(parsed_packet.header.truncation);
+        assert_eq!(parsed_packet.header.question_count, 1);
+        assert_eq!(parsed_packet.questions, dns_packet.questions);
+        assert_eq!(parsed_packet.header.answer_rr_count, 1);
+        assert_eq!(parsed_packet.answers, dns_packet.answers);
+        assert_eq!(parsed_packet.header.authority_rr_count, 1);
+        assert_eq!(parsed_packet.authorities, dns_packet.authorities);
+        assert_eq!(parsed_packet.header.additional_rr_count, 0);
+        assert!(parsed_packet.additionals.is_empty());
+    }
+
+    #[test]
+    fn dns_packet_multiple_answers_truncation() {
+        let mut dns_packet = get_empty_dns_packet(10);
+        // Add counts
+        dns_packet.header.question_count = 1;
+        dns_packet.header.answer_rr_count = 2;
+        // Add questions
+        dns_packet
+            .questions
+            .push(Question::new("test.com", QueryType::A));
+        // Add answers
+        dns_packet.answers.push(ResourceRecord::new(
+            "test.com",
+            ResourceData::A {
+                address: Ipv4Addr::LOCALHOST,
+            },
+            Some(16),
+            None,
+        ));
+        dns_packet.answers.push(ResourceRecord::new(
+            "test.com",
+            ResourceData::AAAA {
+                address: Ipv6Addr::LOCALHOST,
+            },
+            Some(16),
+            None,
+        ));
+
+        let mut buf = ByteBuf::new_empty(None);
+        let encoded_size = dns_packet
+            // 12 /* header */ + 14 /* question */ + 16 /* first answer RR */
+            .encode_to_buf(&mut buf, Some(42))
+            .expect("shouldn't have failed");
+        // Should be exactly 42 bytes in size
+        assert_eq!(encoded_size, 42);
+        let parsed_packet = DnsPacket::from_buf(&mut buf).expect("shouldn't have failed");
+        // Check that header was correctly handled during truncation
+        assert_common_dns_header_fields(&dns_packet.header, &parsed_packet.header);
+        // Should've been truncated
+        assert!(parsed_packet.header.truncation);
+        assert_eq!(parsed_packet.header.question_count, 1);
+        assert_eq!(parsed_packet.questions, dns_packet.questions);
+        assert_eq!(parsed_packet.header.answer_rr_count, 1);
+        assert_eq!(parsed_packet.answers.get(0), dns_packet.answers.get(0));
+    }
+
+    #[cfg(feature = "edns")]
+    #[should_panic(expected = "max size is too low: can't fit OPT RR")]
+    #[test]
+    fn dns_packet_opt_rr_truncation_low_size() {
+        let mut dns_packet = get_empty_dns_packet(10);
+        dns_packet.header.additional_rr_count = 1;
+        // Add OPT RR
+        dns_packet.additionals.push(ResourceRecord::new(
+            "",
+            ResourceData::OPT { options: None },
+            Some(1232),
+            None,
+        ));
+        dns_packet.edns = Some(0);
+
+        let mut buf = ByteBuf::new_empty(None);
+        dns_packet.encode_to_buf(&mut buf, Some(12)).unwrap();
+    }
+
+    #[cfg(feature = "edns")]
+    #[test]
+    fn dns_packet_truncation_should_prioritize_opt_rr() {
+        let mut dns_packet = get_empty_dns_packet(10);
+        // Add counts
+        dns_packet.header.question_count = 1;
+        dns_packet.header.additional_rr_count = 1;
+        // Add questions
+        dns_packet
+            .questions
+            .push(Question::new("test.com", QueryType::A));
+        // Add OPT RR
+        dns_packet.additionals.push(ResourceRecord::new(
+            "",
+            ResourceData::OPT { options: None },
+            Some(1232),
+            None,
+        ));
+        dns_packet.edns = Some(0);
+
+        let mut buf = ByteBuf::new_empty(None);
+        let encoded_size = dns_packet
+            .encode_to_buf(&mut buf, Some(26))
+            .expect("shouldn't have failed");
+        // Should be exactly 23 bytes in size: 12 /* header */ + 11 /* OPT RR */
+        assert_eq!(encoded_size, 23);
+        let parsed_packet = DnsPacket::from_buf(&mut buf).expect("shouldn't have failed");
+        // Check that header was correctly handled during truncation
+        assert_common_dns_header_fields(&dns_packet.header, &parsed_packet.header);
+        // Should've been truncated
+        assert!(parsed_packet.header.truncation);
+        // Should've discarded the question to preserve OPT RR
+        assert_eq!(parsed_packet.header.question_count, 0);
+        assert!(parsed_packet.questions.is_empty());
+        assert_eq!(parsed_packet.header.additional_rr_count, 1);
+        assert_eq!(parsed_packet.additionals, dns_packet.additionals);
+        assert_eq!(parsed_packet.edns, dns_packet.edns);
     }
 }
