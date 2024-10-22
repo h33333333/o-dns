@@ -8,7 +8,9 @@ use std::{
 
 use anyhow::Context;
 
-use crate::{utils::get_max_encoded_qname_size, ByteBuf, EncodeToBuf, FromBuf, QueryType};
+use crate::{
+    buf::EncodedSize, utils::get_max_encoded_qname_size, ByteBuf, EncodeToBuf, FromBuf, QueryType,
+};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ResourceRecord<'a> {
@@ -79,7 +81,12 @@ impl<'a> EncodeToBuf for ResourceRecord<'a> {
         &'r self,
         buf: &mut ByteBuf,
         mut label_cache: Option<&mut HashMap<&'cache str, usize>>,
-    ) -> anyhow::Result<()> {
+        max_size: Option<usize>,
+    ) -> anyhow::Result<usize> {
+        let encoded_size = self.get_encoded_size(label_cache.as_deref());
+        if max_size.is_some_and(|max_size| encoded_size > max_size) {
+            return Ok(0);
+        }
         buf.write_qname(&self.name, label_cache.as_deref_mut())
             .context("writing NAME")?;
         buf.write_u16(self.resource_data.get_query_type().into())
@@ -89,14 +96,17 @@ impl<'a> EncodeToBuf for ResourceRecord<'a> {
             .context("writing TTL")?;
 
         self.resource_data
-            .encode_to_buf_with_cache(buf, label_cache)
+            .encode_to_buf_with_cache(buf, label_cache, max_size)
             .context("writing RDATA")?;
 
-        Ok(())
+        Ok(encoded_size)
     }
+}
 
-    fn get_encoded_size(&self) -> usize {
-        get_max_encoded_qname_size(&self.name) + 2 /* CLASS */ + 4 /* TTL */ + self.resource_data.get_encoded_size()
+impl EncodedSize for ResourceRecord<'_> {
+    fn get_encoded_size(&self, label_cache: Option<&HashMap<&str, usize>>) -> usize {
+        let qname_size = get_max_encoded_qname_size(&self.name, label_cache.as_deref());
+        qname_size + 2 /* TYPE */ + 2 /* CLASS */ + 4 /* TTL */ + self.resource_data.get_encoded_size(label_cache)
     }
 }
 
@@ -226,7 +236,12 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
         &'r self,
         buf: &mut ByteBuf,
         label_cache: Option<&mut HashMap<&'cache str, usize>>,
-    ) -> anyhow::Result<()> {
+        max_size: Option<usize>,
+    ) -> anyhow::Result<usize> {
+        let encoded_size = self.get_encoded_size(label_cache.as_deref());
+        if max_size.is_some_and(|max_size| encoded_size > max_size) {
+            return Ok(0);
+        }
         match self {
             ResourceData::UNKNOWN { rdata: data, .. } => {
                 buf.write_u16(data.len() as u16)
@@ -314,10 +329,12 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
             }
         };
 
-        Ok(())
+        Ok(encoded_size)
     }
+}
 
-    fn get_encoded_size(&self) -> usize {
+impl EncodedSize for ResourceData<'_> {
+    fn get_encoded_size(&self, label_cache: Option<&HashMap<&str, usize>>) -> usize {
         let mut size = 2 /* RDLENGTH */;
         match self {
             ResourceData::UNKNOWN { rdata, .. } => {
@@ -327,10 +344,10 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
                 size += 4 /* Ipv4Addr */;
             }
             ResourceData::NS { ns_domain_name } => {
-                size += get_max_encoded_qname_size(ns_domain_name);
+                size += get_max_encoded_qname_size(ns_domain_name, label_cache);
             }
             ResourceData::CNAME { cname } => {
-                size += get_max_encoded_qname_size(cname);
+                size += get_max_encoded_qname_size(cname, label_cache);
             }
             ResourceData::AAAA { .. } => {
                 size += 16 /* Ipv6Addr */;
@@ -360,7 +377,8 @@ mod tests {
         fn resource_data_roundtrip(resource_data in arb_resource_data()) {
             let qtype = resource_data.get_query_type();
             let mut buf = ByteBuf::new_empty(None);
-            resource_data.encode_to_buf(&mut buf).expect("shouldn't have failed");
+            let encoded_size = resource_data.encode_to_buf(&mut buf, None).expect("shouldn't have failed");
+            assert_eq!(encoded_size, buf.len());
             let roundtripped_rd = ResourceData::from_buf_with_type(&mut buf, qtype).expect("shouldn't have failed");
             prop_assert_eq!(resource_data, roundtripped_rd, "ResourceData roundtrip test failed");
         }
@@ -368,7 +386,8 @@ mod tests {
         #[test]
         fn resource_record_roundtrip(resource_record in arb_resource_record()) {
             let mut buf = ByteBuf::new_empty(None);
-            resource_record.encode_to_buf(&mut buf).expect("shouldn't have failed");
+            let encoded_size = resource_record.encode_to_buf(&mut buf, None).expect("shouldn't have failed");
+            assert_eq!(encoded_size, buf.len());
             let roundtripped_rr = ResourceRecord::from_buf(&mut buf).expect("shouldn't have failed");
             prop_assert_eq!(resource_record, roundtripped_rr, "ResourceRecord roundtrip test failed");
         }

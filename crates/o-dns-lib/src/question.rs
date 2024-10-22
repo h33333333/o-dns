@@ -1,4 +1,4 @@
-use crate::{utils::get_max_encoded_qname_size, ByteBuf, EncodeToBuf, FromBuf};
+use crate::{buf::EncodedSize, utils::get_max_encoded_qname_size, ByteBuf, EncodeToBuf, FromBuf};
 use anyhow::Context;
 use std::{borrow::Cow, collections::HashMap};
 
@@ -86,7 +86,12 @@ impl<'a> EncodeToBuf for Question<'a> {
         &'r self,
         buf: &mut ByteBuf,
         label_cache: Option<&mut HashMap<&'cache str, usize>>,
-    ) -> anyhow::Result<()> {
+        max_size: Option<usize>,
+    ) -> anyhow::Result<usize> {
+        let encoded_size = self.get_encoded_size(label_cache.as_deref());
+        if max_size.is_some_and(|max_size| encoded_size > max_size) {
+            return Ok(0);
+        }
         buf.write_qname(&self.qname, label_cache)
             .context("writing QNAME")?;
         buf.write_u16(self.query_type.into())
@@ -94,11 +99,14 @@ impl<'a> EncodeToBuf for Question<'a> {
         // IN
         buf.write_u16(1).context("writing QCLASS")?;
 
-        Ok(())
+        Ok(encoded_size)
     }
+}
 
-    fn get_encoded_size(&self) -> usize {
-        get_max_encoded_qname_size(&self.qname) + 2 /* QTYPE */ + 2 /* CLASS */
+impl EncodedSize for Question<'_> {
+    fn get_encoded_size(&self, label_cache: Option<&HashMap<&str, usize>>) -> usize {
+        let qname_size = get_max_encoded_qname_size(&self.qname, label_cache);
+        qname_size + 2 /* QTYPE */ + 2 /* CLASS */
     }
 }
 
@@ -112,7 +120,8 @@ mod tests {
         #[test]
         fn question_roundtrip(question in arb_question()) {
             let mut buf = ByteBuf::new_empty(None);
-            question.encode_to_buf(&mut buf).expect("shouldn't have failed");
+            let encoded_size = question.encode_to_buf(&mut buf, None).expect("shouldn't have failed");
+            assert_eq!(encoded_size, buf.len());
             let roundtripped_question = Question::from_buf(&mut buf).expect("shouldn't have failed");
             prop_assert_eq!(question, roundtripped_question, "Question roundtrip test failed");
         }

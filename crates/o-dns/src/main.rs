@@ -250,15 +250,14 @@ async fn handle_query(
         }
     }
 
-    // UDP: truncate the response if the requestor's buffer is too small
-    if !is_using_tcp {
-        response_packet.minimize_to_size(edns_buf_length.unwrap_or(MAX_STANDARD_DNS_MSG_SIZE));
-    }
-
     // Encode the response packet
     let mut dst = ByteBuf::new_empty(Some(DEFAULT_EDNS_BUF_CAPACITY));
     response_packet
-        .encode_to_buf(&mut dst)
+        .encode_to_buf(
+            &mut dst,
+            // UDP: truncate the response if the requestor's buffer is too small
+            (!is_using_tcp).then(|| edns_buf_length.unwrap_or(MAX_STANDARD_DNS_MSG_SIZE)),
+        )
         .context("error while encoding the response")?;
 
     Ok(dst.into_inner().into_owned())

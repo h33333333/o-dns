@@ -34,6 +34,13 @@ pub async fn resolve_with_upstream(
 
     let mut force_tcp = false;
     loop {
+        // Clear the buf in case it's a retry over TCP
+        buf.clear();
+        packet
+            // No need to verify the packet's size here, as it was done above
+            .encode_to_buf(&mut buf, None)
+            .context("error while encoding the DNS packet")?;
+
         // TODO: verify whether the upstream server supports EDNS by maintaining a cache.
         //   if it's the first query to this server -> assume no EDNS by default but add OPT RR
         let mut connection: Connection = if force_tcp || buf.len() > MAX_STANDARD_DNS_MSG_SIZE {
@@ -52,12 +59,6 @@ pub async fn resolve_with_upstream(
                 .context("UDP: error while connecting to the upstream resolver")?;
             Connection::Udp(socket)
         };
-
-        // Clear the buf in case it's a retry over TCP
-        buf.clear();
-        packet
-            .encode_to_buf(&mut buf)
-            .context("error while encoding the DNS packet")?;
 
         connection
             .send_encoded_packet(&buf)

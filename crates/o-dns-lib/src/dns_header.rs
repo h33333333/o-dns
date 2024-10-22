@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 
-use crate::{ByteBuf, EncodeToBuf, FromBuf};
+use crate::{buf::EncodedSize, ByteBuf, EncodeToBuf, FromBuf};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -180,7 +180,12 @@ impl EncodeToBuf for DnsHeader {
         &'r self,
         buf: &mut ByteBuf,
         _label_cache: Option<&mut HashMap<&'cache str, usize>>,
-    ) -> anyhow::Result<()> {
+        max_size: Option<usize>,
+    ) -> anyhow::Result<usize> {
+        let encoded_size = self.get_encoded_size(None);
+        if max_size.is_some_and(|max_size| encoded_size > max_size) {
+            return Ok(0);
+        }
         buf.write_u16(self.id).context("writing ID")?;
         buf.write_u16(self.get_flags()).context("writing flags")?;
         buf.write_u16(self.question_count)
@@ -192,10 +197,12 @@ impl EncodeToBuf for DnsHeader {
         buf.write_u16(self.additional_rr_count)
             .context("writing additional count")?;
 
-        Ok(())
+        Ok(encoded_size)
     }
+}
 
-    fn get_encoded_size(&self) -> usize {
+impl EncodedSize for DnsHeader {
+    fn get_encoded_size(&self, _: Option<&HashMap<&str, usize>>) -> usize {
         2 /* ID */ + 2 /* flags */ + 2 /* question count */
             + 2 /* answer count */ + 2 /* authority count */ + 2 /* additional count */
     }
@@ -234,7 +241,7 @@ mod tests {
         #[test]
         fn dns_header_roundtrip(dns_header: DnsHeader) {
             let mut buf = ByteBuf::new_empty(None);
-            dns_header.encode_to_buf(&mut buf).expect("shouldn't have failed");
+            dns_header.encode_to_buf(&mut buf, None).expect("shouldn't have failed");
             let roundtripped_header = DnsHeader::from_buf(&mut buf).expect("shouldn't have failed");
             prop_assert_eq!(dns_header, roundtripped_header, "DnsHeader roundtrip test failed");
         }

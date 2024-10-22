@@ -17,13 +17,16 @@ pub trait EncodeToBuf {
         &'r self,
         buf: &mut ByteBuf,
         label_cache: Option<&mut HashMap<&'cache str, usize>>,
-    ) -> anyhow::Result<()>;
+        max_size: Option<usize>,
+    ) -> anyhow::Result<usize>;
 
-    fn encode_to_buf(&self, buf: &mut ByteBuf) -> anyhow::Result<()> {
-        self.encode_to_buf_with_cache(buf, None)
+    fn encode_to_buf(&self, buf: &mut ByteBuf, max_size: Option<usize>) -> anyhow::Result<usize> {
+        self.encode_to_buf_with_cache(buf, None, max_size)
     }
+}
 
-    fn get_encoded_size(&self) -> usize;
+pub trait EncodedSize {
+    fn get_encoded_size(&self, label_cache: Option<&HashMap<&str, usize>>) -> usize;
 }
 
 pub struct ByteBuf<'a> {

@@ -239,6 +239,7 @@ name = "o-dns-lib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cfg-if",
  "proptest",
  "proptest-derive",
  "thiserror",
