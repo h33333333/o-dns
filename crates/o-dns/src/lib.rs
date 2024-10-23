@@ -4,6 +4,7 @@ mod hosts;
 pub use hosts::{Blacklist, Hosts};
 mod upstream;
 pub use upstream::resolve_with_upstream;
+mod cache;
 pub mod util;
 
 use std::net::SocketAddr;
