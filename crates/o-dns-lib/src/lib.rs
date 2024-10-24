@@ -429,7 +429,7 @@ mod tests {
             .push(Question::new("test.com", QueryType::A));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
-            "test.com",
+            "test.com".into(),
             ResourceData::A {
                 address: Ipv4Addr::LOCALHOST,
             },
@@ -468,7 +468,7 @@ mod tests {
             .push(Question::new("test.com", QueryType::A));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
-            "test.com",
+            "test.com".into(),
             ResourceData::A {
                 address: Ipv4Addr::LOCALHOST,
             },
@@ -512,7 +512,7 @@ mod tests {
             .push(Question::new("test.com", QueryType::A));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
-            "test.com",
+            "test.com".into(),
             ResourceData::A {
                 address: Ipv4Addr::LOCALHOST,
             },
@@ -558,7 +558,7 @@ mod tests {
             .push(Question::new("test.com", QueryType::A));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
-            "test.com",
+            "test.com".into(),
             ResourceData::A {
                 address: Ipv4Addr::LOCALHOST,
             },
@@ -566,7 +566,7 @@ mod tests {
             None,
         ));
         dns_packet.answers.push(ResourceRecord::new(
-            "test.com",
+            "test.com".into(),
             ResourceData::AAAA {
                 address: Ipv6Addr::LOCALHOST,
             },
@@ -600,7 +600,7 @@ mod tests {
         dns_packet.header.additional_rr_count = 1;
         // Add OPT RR
         dns_packet.additionals.push(ResourceRecord::new(
-            "",
+            "test.com".into(),
             ResourceData::OPT { options: None },
             Some(1232),
             None,
@@ -624,7 +624,7 @@ mod tests {
             .push(Question::new("test.com", QueryType::A));
         // Add OPT RR
         dns_packet.additionals.push(ResourceRecord::new(
-            "",
+            "test.com".into(),
             ResourceData::OPT { options: None },
             Some(1232),
             None,
