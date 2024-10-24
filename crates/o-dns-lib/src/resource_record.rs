@@ -22,13 +22,13 @@ pub struct ResourceRecord<'a> {
 
 impl<'a> ResourceRecord<'a> {
     pub fn new<'s: 'a>(
-        name: &'s str,
+        name: Cow<'s, str>,
         resource_data: ResourceData<'a>,
         ttl: Option<u32>,
         class: Option<u16>,
     ) -> Self {
         ResourceRecord {
-            name: name.into(),
+            name,
             ttl: ttl.unwrap_or_default(),
             class: class.unwrap_or(1),
             resource_data,
