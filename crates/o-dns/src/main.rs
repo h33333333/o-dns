@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use o_dns::util::{get_dns_query_hash, get_edns_rr, get_empty_dns_packet};
+use o_dns::util::{get_dns_query_hash, get_edns_rr, get_empty_dns_packet, parse_blacklist_file};
 use o_dns::{
     resolve_with_upstream, setup_logging, CacheRecordKind, CachedRecord, State,
     DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE,
@@ -7,6 +7,8 @@ use o_dns::{
 use o_dns_lib::{ByteBuf, DnsPacket, QueryType, ResourceData, ResourceRecord, ResponseCode};
 use o_dns_lib::{EncodeToBuf as _, FromBuf as _};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::ops::DerefMut;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -19,6 +21,15 @@ async fn main() -> anyhow::Result<()> {
     setup_logging()?;
 
     let state = Arc::new(State::new());
+
+    // Populate the blacklist
+    parse_blacklist_file(
+        Path::new("blacklist_sample"),
+        state.blacklist.write().await.deref_mut(),
+    )
+    .await
+    .context("error while parsing the blacklist file")?;
+
     state
         .hosts
         .write()

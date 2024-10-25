@@ -1,0 +1,7 @@
+# This is a sample blacklist that can be loaded into the DNS server
+# NOTE: it doesn't currently support regexps
+# Format:
+# <Domain> [<Optional label>]
+
+test.com [Entry label]
+ad-spammer.xyz # Or you can just leave an inline comment for yourself here

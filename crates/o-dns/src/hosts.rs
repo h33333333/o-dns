@@ -30,7 +30,7 @@ impl Hosts {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Blacklist {
     entries: HashSet<String>,
 }
