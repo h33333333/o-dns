@@ -624,7 +624,7 @@ mod tests {
             .push(Question::new("test.com", QueryType::A));
         // Add OPT RR
         dns_packet.additionals.push(ResourceRecord::new(
-            "test.com".into(),
+            "".into(),
             ResourceData::OPT { options: None },
             Some(1232),
             None,
