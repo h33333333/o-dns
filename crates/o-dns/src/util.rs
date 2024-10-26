@@ -1,5 +1,6 @@
 use anyhow::Context;
 use o_dns_lib::{DnsHeader, DnsPacket, Question, ResourceData, ResourceRecord, ResponseCode};
+use regex::Regex;
 use sha1::Digest;
 use std::{borrow::Cow, collections::HashMap, path::Path};
 use tokio::{
@@ -99,50 +100,112 @@ pub async fn parse_blacklist_file(path: &Path, blacklist: &mut Blacklist) -> any
             continue;
         };
 
-        let (domain, remaining_line) = {
+        let remaining_line = {
             let trimmed_len = line.trim_start().len();
             let domain_start_idx = line.len() - trimmed_len;
             let remaining_line = &mut line.as_mut_str()[domain_start_idx..];
 
-            let mut domain_length = 0;
-            for (idx, byte) in unsafe { remaining_line.as_bytes_mut().into_iter().enumerate() } {
-                if byte.is_ascii_alphanumeric() {
-                    byte.make_ascii_lowercase();
-                    domain_length += 1;
-                } else if idx > 0 && (*byte == b'.' || *byte == b'-') {
-                    domain_length += 1;
-                } else {
-                    // Stop iterating as we encountered an invalid character.
-                    // Process whatever we gathered at this point and continue to the next line
-                    break;
-                }
+            if remaining_line.starts_with('/') {
+                // It's a regex
+                let Ok((regex, remaining_line)) = parse_regex(remaining_line) else {
+                    // Malformed regex
+                    continue;
+                };
+                let regex = match Regex::new(regex) {
+                    Ok(regex) => regex,
+                    Err(e) => {
+                        tracing::debug!(%regex, "Error while parsing a regex: {}", e);
+                        continue;
+                    }
+                };
+                blacklist.add_regex(regex);
+                remaining_line
+            } else {
+                // It should be a domain name otherwise
+                let Some((domain, remaining_line)) = parse_domain_name(remaining_line) else {
+                    // Malformed domain
+                    tracing::debug!("Error while parsing a domain: {}", remaining_line);
+                    continue;
+                };
+                blacklist.add_entry(domain);
+                remaining_line
             }
-            let domain = &remaining_line[..domain_length];
-            let Some(tld_start_idx) = domain.rfind('.') else {
-                // Malformed line with a single domain label
-                continue;
-            };
-            if tld_start_idx == domain.len() - 1 {
-                // Malformed line: 'example.'
-                continue;
-            }
-            let tld = &domain[tld_start_idx + 1..];
-            if tld.len() < 2 || !tld.bytes().all(|byte| byte.is_ascii_alphabetic()) {
-                // Bad TLD: 'example.b' or 'example.t3st'
-                continue;
-            }
-            remaining_line.split_at_mut(domain_length)
         };
 
         // TODO: store labels in the blacklist for future use
         let _label = remaining_line.find('[').and_then(|label_start_idx| {
-            remaining_line
+            remaining_line[label_start_idx..]
                 .find(']')
                 .map(|label_end_idx| remaining_line.get(label_start_idx + 1..label_end_idx))
         });
-
-        blacklist.add_entry(domain.to_string());
     }
 
     Ok(())
+}
+
+/// Parses a regex formatted like `/<re>/`
+pub fn parse_regex(mut line: &mut str) -> anyhow::Result<(&mut str, &mut str)> {
+    if !line.starts_with('/') {
+        anyhow::bail!("line doesn't contain a regex");
+    }
+
+    // Skip the leading '/'
+    line = &mut line[1..];
+    let regex_length = line
+        .bytes()
+        .scan(false, |escaped_symbol, byte| {
+            if byte == b'/' && !*escaped_symbol {
+                return None;
+            }
+            if byte == b'\\' && !*escaped_symbol {
+                *escaped_symbol = true;
+            } else {
+                *escaped_symbol = false;
+            }
+            Some(())
+        })
+        .count();
+
+    let (regex, remaining_line) = line.split_at_mut(regex_length);
+
+    if !remaining_line.starts_with('/') {
+        // Regex with a missing closing delimiter
+        anyhow::bail!("malformed regex");
+    }
+
+    // Remove the remaining '/'
+    Ok((regex, &mut remaining_line[1..]))
+}
+
+pub fn parse_domain_name(line: &mut str) -> Option<(&mut str, &mut str)> {
+    let mut domain_length = 0;
+    for (idx, byte) in unsafe { line.as_bytes_mut().into_iter().enumerate() } {
+        if byte.is_ascii_alphanumeric() {
+            byte.make_ascii_lowercase();
+            domain_length += 1;
+        } else if idx > 0 && (*byte == b'.' || *byte == b'-') {
+            domain_length += 1;
+        } else {
+            // Stop iterating as we encountered an invalid character.
+            // Process whatever we gathered at this point and continue to the next line
+            break;
+        }
+    }
+    let domain = &line[..domain_length];
+
+    // Return early if encountered a malformed line with a single domain label
+    let tld_start_idx = domain.rfind('.')?;
+
+    if tld_start_idx == domain.len() - 1 {
+        // Malformed line: 'example.'
+        return None;
+    }
+
+    let tld = &domain[tld_start_idx + 1..];
+    if tld.len() < 2 || !tld.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        // Bad TLD: 'example.b' or 'example.t3st'
+        None
+    } else {
+        Some(line.split_at_mut(domain_length))
+    }
 }

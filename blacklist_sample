@@ -1,7 +1,9 @@
 # This is a sample blacklist that can be loaded into the DNS server
-# NOTE: it doesn't currently support regexps
 # Format:
-# <Domain> [<Optional label>]
+# <Domain>|<Regex> [<Optional label>]
 
 test.com [Entry label]
 ad-spammer.xyz # Or you can just leave an inline comment for yourself here
+
+# Regexes are also supported, but MUST be enclosed in '/' in order to be parsed
+/.*\.ru/ [All russian domains]
