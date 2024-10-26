@@ -18,3 +18,4 @@ tokio = { version = "1.40.0", features = [
     "fs",
 ] }
 sha1 = "0.10.6"
+regex = "1.11.1"
