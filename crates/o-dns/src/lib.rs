@@ -2,7 +2,7 @@ mod logging;
 use cache::Cache;
 pub use logging::setup_logging;
 mod hosts;
-pub use hosts::{Blacklist, Hosts};
+pub use hosts::{Blacklist, Whitelist};
 mod upstream;
 pub use upstream::resolve_with_upstream;
 mod cache;
@@ -20,7 +20,7 @@ pub const MAX_STANDARD_DNS_MSG_SIZE: usize = 512;
 pub struct State {
     pub upstream_resolver: SocketAddr,
     pub blacklist: RwLock<Blacklist>,
-    pub hosts: RwLock<Hosts>,
+    pub hosts: RwLock<Whitelist>,
     pub cache: RwLock<Cache>,
 }
 
