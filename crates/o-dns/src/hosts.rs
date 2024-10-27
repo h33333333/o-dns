@@ -4,21 +4,27 @@ use o_dns_lib::{QueryType, ResourceData};
 use regex::Regex;
 use sha1::{Digest, Sha1};
 
+use crate::util::hash_to_u128;
+
 #[derive(Default)]
-pub struct Hosts {
-    hosts: HashMap<String, Vec<ResourceData<'static>>>,
+pub struct Whitelist {
+    map: HashMap<u128, Vec<ResourceData<'static>>>,
 }
 
-impl Hosts {
+impl Whitelist {
     pub fn new() -> Self {
         Default::default()
     }
 
-    pub fn add_entry(&mut self, qname: String, rdata: ResourceData<'static>) -> anyhow::Result<()> {
+    pub fn add_entry(
+        &mut self,
+        qname_hash: u128,
+        rdata: ResourceData<'static>,
+    ) -> anyhow::Result<()> {
         match rdata.get_query_type() {
             QueryType::A | QueryType::AAAA | QueryType::CNAME => {
-                self.hosts
-                    .entry(qname)
+                self.map
+                    .entry(qname_hash)
                     .and_modify(|records| records.push(rdata.clone()))
                     .or_insert_with(|| vec![rdata]);
                 Ok(())
@@ -28,7 +34,9 @@ impl Hosts {
     }
 
     pub fn get_entry(&self, qname: &str) -> Option<&[ResourceData<'static>]> {
-        self.hosts.get(qname).map(|records| records.as_slice())
+        self.map
+            .get(&hash_to_u128(qname))
+            .map(|records| records.as_slice())
     }
 }
 
@@ -43,14 +51,8 @@ impl Blacklist {
         Default::default()
     }
 
-    pub fn add_entry(&mut self, qname: &str) {
-        let mut hasher = Sha1::new();
-        hasher.update(qname);
-        let hash = hasher.finalize();
-        // Reduce the output hash to first 16 bytes in order to fit it into a single u128
-        let hash = u128::from_be_bytes(hash[..16].try_into().unwrap());
-
-        self.entries.insert(hash);
+    pub fn add_entry(&mut self, qname_hash: u128) {
+        self.entries.insert(qname_hash);
     }
 
     pub fn add_regex(&mut self, re: Regex) {
@@ -58,15 +60,29 @@ impl Blacklist {
     }
 
     pub fn contains_entry(&self, qname: &str) -> bool {
-        let mut hasher = Sha1::new();
-        hasher.update(qname);
-        let hash = hasher.finalize();
-        // Reduce the output hash to first 16 bytes in order to fit it into a single u128
-        let hash = u128::from_be_bytes(hash[..16].try_into().unwrap());
-
         // Look for a direct match first
-        if self.entries.contains(&hash) {
+        if self.entries.contains(&hash_to_u128(qname)) {
             return true;
+        }
+
+        // Look for a wildcard match
+        for (idx, label) in qname.split('.').enumerate().skip(1) {
+            if label.is_empty() {
+                continue;
+            }
+
+            let remaining_qname = qname.splitn(idx + 1, '.').last().unwrap();
+
+            let mut hasher = Sha1::new();
+            hasher.update("*.");
+            hasher.update(remaining_qname);
+
+            let hash = hasher.finalize();
+            let hash = u128::from_be_bytes(hash[..16].try_into().unwrap());
+
+            if self.entries.contains(&hash) {
+                return true;
+            }
         }
 
         // Compare the qname against all regexes that we have

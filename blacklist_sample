@@ -7,3 +7,6 @@ ad-spammer.xyz # Or you can just leave an inline comment for yourself here
 
 # Regexes are also supported, but MUST be enclosed in '/' in order to be parsed
 /.*\.ru/ [All russian domains]
+
+# Wildcard domains are also supported
+*.cn

@@ -73,6 +73,15 @@ pub fn get_dns_query_hash(
     u128::from_be_bytes(hash[..16].try_into().unwrap())
 }
 
+pub fn hash_to_u128(data: impl AsRef<[u8]>) -> u128 {
+    let mut hasher = sha1::Sha1::new();
+
+    hasher.update(data);
+
+    let hash = hasher.finalize();
+    u128::from_be_bytes(hash[..16].try_into().unwrap())
+}
+
 pub async fn parse_blacklist_file(path: &Path, blacklist: &mut Blacklist) -> anyhow::Result<()> {
     let mut file = BufReader::new(
         File::open(path)
@@ -127,7 +136,8 @@ pub async fn parse_blacklist_file(path: &Path, blacklist: &mut Blacklist) -> any
                     tracing::debug!("Error while parsing a domain: {}", remaining_line);
                     continue;
                 };
-                blacklist.add_entry(domain);
+
+                blacklist.add_entry(hash_to_u128(domain));
                 remaining_line
             }
         };
@@ -179,12 +189,24 @@ pub fn parse_regex(mut line: &mut str) -> anyhow::Result<(&mut str, &mut str)> {
 
 pub fn parse_domain_name(line: &mut str) -> Option<(&mut str, &mut str)> {
     let mut domain_length = 0;
+    let mut is_wildcard_label = false;
     for (idx, byte) in unsafe { line.as_bytes_mut().into_iter().enumerate() } {
+        if is_wildcard_label && !(*byte == b'.') {
+            // Protect against entries like '*test.abc'
+            return None;
+        } else {
+            is_wildcard_label = false;
+        }
+
         if byte.is_ascii_alphanumeric() {
             byte.make_ascii_lowercase();
             domain_length += 1;
         } else if idx > 0 && (*byte == b'.' || *byte == b'-') {
             domain_length += 1;
+        } else if idx == 0 && (*byte == b'*') {
+            // A wildcard domain
+            domain_length += 1;
+            is_wildcard_label = true;
         } else {
             // Stop iterating as we encountered an invalid character.
             // Process whatever we gathered at this point and continue to the next line
