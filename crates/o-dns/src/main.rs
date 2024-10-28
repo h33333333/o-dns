@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
         .write()
         .await
         .add_entry(
-            hash_to_u128("example.com"),
+            hash_to_u128("example.com", None),
             ResourceData::A {
                 address: "10.13.37.0".parse().expect("shouldn't fail"),
             },

@@ -73,9 +73,10 @@ pub fn get_dns_query_hash(
     u128::from_be_bytes(hash[..16].try_into().unwrap())
 }
 
-pub fn hash_to_u128(data: impl AsRef<[u8]>) -> u128 {
+pub fn hash_to_u128(data: impl AsRef<[u8]>, prefix: Option<&[u8]>) -> u128 {
     let mut hasher = sha1::Sha1::new();
 
+    prefix.into_iter().for_each(|prefix| hasher.update(prefix));
     hasher.update(data);
 
     let hash = hasher.finalize();
@@ -137,7 +138,7 @@ pub async fn parse_blacklist_file(path: &Path, blacklist: &mut Blacklist) -> any
                     continue;
                 };
 
-                blacklist.add_entry(hash_to_u128(domain));
+                blacklist.add_entry(hash_to_u128(domain, None));
                 remaining_line
             }
         };
@@ -154,7 +155,7 @@ pub async fn parse_blacklist_file(path: &Path, blacklist: &mut Blacklist) -> any
 }
 
 /// Parses a regex formatted like `/<re>/`
-pub fn parse_regex(mut line: &mut str) -> anyhow::Result<(&mut str, &mut str)> {
+fn parse_regex(mut line: &mut str) -> anyhow::Result<(&mut str, &mut str)> {
     if !line.starts_with('/') {
         anyhow::bail!("line doesn't contain a regex");
     }
@@ -187,7 +188,7 @@ pub fn parse_regex(mut line: &mut str) -> anyhow::Result<(&mut str, &mut str)> {
     Ok((regex, &mut remaining_line[1..]))
 }
 
-pub fn parse_domain_name(line: &mut str) -> Option<(&mut str, &mut str)> {
+fn parse_domain_name(line: &mut str) -> Option<(&mut str, &mut str)> {
     let mut domain_length = 0;
     let mut is_wildcard_label = false;
     for (idx, byte) in unsafe { line.as_bytes_mut().into_iter().enumerate() } {
