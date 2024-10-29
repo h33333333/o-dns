@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use o_dns::util::{
-    get_dns_query_hash, get_edns_rr, get_empty_dns_packet, hash_to_u128, parse_blacklist_file,
+    get_dns_query_hash, get_edns_rr, get_empty_dns_packet, parse_denylist_file, parse_hosts_file,
 };
 use o_dns::{
     resolve_with_upstream, setup_logging, CacheRecordKind, CachedRecord, State,
@@ -24,25 +24,21 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(State::new());
 
-    // Populate the blacklist
-    parse_blacklist_file(
-        Path::new("blacklist_sample"),
-        state.blacklist.write().await.deref_mut(),
+    // Populate the denylist
+    parse_denylist_file(
+        Path::new("denylist_sample"),
+        state.denylist.write().await.deref_mut(),
     )
     .await
-    .context("error while parsing the blacklist file")?;
+    .context("error while parsing the denylist file")?;
 
-    state
-        .hosts
-        .write()
-        .await
-        .add_entry(
-            hash_to_u128("example.com", None),
-            ResourceData::A {
-                address: "10.13.37.0".parse().expect("shouldn't fail"),
-            },
-        )
-        .context("failed to add a hosts entry")?;
+    // Populate the hosts file
+    parse_hosts_file(
+        Path::new("hosts_sample"),
+        state.hosts.write().await.deref_mut(),
+    )
+    .await
+    .context("error while parsing the hosts file")?;
 
     let udp_socket = Arc::new(
         UdpSocket::bind("0.0.0.0:53")
@@ -255,7 +251,7 @@ async fn handle_query(
         }
 
         // Check if requested host is explicitly blacklisted
-        if state.blacklist.read().await.contains_entry(&question.qname) {
+        if state.denylist.read().await.contains_entry(&question.qname) {
             response_packet.header.is_authoritative = true;
             let rdata: Option<ResourceData<'_>> = match question.query_type {
                 // Send only A records to ANY queries if blacklisted

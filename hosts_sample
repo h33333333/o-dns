@@ -1,0 +1,6 @@
+# This is a sample blacklist that can be loaded into the DNS server
+# Format:
+# <Domain> <IpAddr> [<Optional label>]
+
+example.com 10.0.0.1 [Label for this entry]
+*.homelab.dev 10.0.0.2 # Wildcards are also supported

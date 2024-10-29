@@ -5,11 +5,11 @@ use o_dns_lib::{QueryType, ResourceData};
 use regex::Regex;
 
 #[derive(Default)]
-pub struct Whitelist {
+pub struct Hosts {
     map: HashMap<u128, Vec<ResourceData<'static>>>,
 }
 
-impl Whitelist {
+impl Hosts {
     pub fn new() -> Self {
         Default::default()
     }
@@ -46,12 +46,12 @@ impl Whitelist {
 }
 
 #[derive(Default, Debug)]
-pub struct Blacklist {
+pub struct Denylist {
     entries: HashSet<u128>,
     regexes: Vec<Regex>,
 }
 
-impl Blacklist {
+impl Denylist {
     pub fn new() -> Self {
         Default::default()
     }
