@@ -2,13 +2,73 @@ use anyhow::Context;
 use o_dns_lib::{DnsHeader, DnsPacket, Question, ResourceData, ResourceRecord, ResponseCode};
 use regex::Regex;
 use sha1::Digest;
-use std::{borrow::Cow, collections::HashMap, path::Path};
+use std::{borrow::Cow, collections::HashMap, net::IpAddr, path::Path};
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, BufReader},
 };
 
-use crate::Blacklist;
+use crate::{Denylist, Hosts};
+
+trait EntryFromStr {
+    fn process_line(&mut self, line: &mut str) -> anyhow::Result<()>;
+}
+
+impl EntryFromStr for Hosts {
+    fn process_line(&mut self, line: &mut str) -> anyhow::Result<()> {
+        let (domain, remaining_line) = parse_domain_name(line).context("failed to parse domain")?;
+
+        let (ip_addr, remaining_line) = {
+            let mut it = remaining_line.splitn(2, ' ');
+            let raw_ip_addr = it.next().context("missing IP address")?;
+            let ip_addr: IpAddr = raw_ip_addr.parse().context("failed to parse IP address")?;
+            (ip_addr, it.next().unwrap_or(""))
+        };
+
+        let rd = match ip_addr {
+            IpAddr::V4(address) => ResourceData::A { address },
+            IpAddr::V6(address) => ResourceData::AAAA { address },
+        };
+
+        // TODO: store labels in the hosts for future use
+        let _label = parse_label(remaining_line);
+
+        // Can't happen as we only create A/AAAA records
+        self.add_entry(hash_to_u128(domain, None), rd)
+            .context("bug: non A/AAAA/CNAME record?")?;
+
+        Ok(())
+    }
+}
+
+impl EntryFromStr for Denylist {
+    fn process_line(&mut self, line: &mut str) -> anyhow::Result<()> {
+        let remaining_line = if line.starts_with('/') {
+            // Handle regex
+            let (regex_str, remaining_line) = parse_regex(line).context("failed to parse regex")?;
+
+            let regex = Regex::new(regex_str)
+                .map_err(|e| anyhow::anyhow!("failed to compile regex '{}': {}", regex_str, e))?;
+
+            self.add_regex(regex);
+
+            remaining_line
+        } else {
+            // Handle domain
+            let (domain, remaining_line) =
+                parse_domain_name(line).context("failed to parse domain")?;
+
+            self.add_entry(hash_to_u128(domain, None));
+
+            remaining_line
+        };
+
+        // TODO: store labels in the denylist for future use
+        let _label = parse_label(remaining_line);
+
+        Ok(())
+    }
+}
 
 pub fn get_empty_dns_packet(
     response_code: Option<ResponseCode>,
@@ -83,11 +143,23 @@ pub fn hash_to_u128(data: impl AsRef<[u8]>, prefix: Option<&[u8]>) -> u128 {
     u128::from_be_bytes(hash[..16].try_into().unwrap())
 }
 
-pub async fn parse_blacklist_file(path: &Path, blacklist: &mut Blacklist) -> anyhow::Result<()> {
+pub async fn parse_hosts_file(path: &Path, whitelist: &mut Hosts) -> anyhow::Result<()> {
+    parse_list_file(path, whitelist)
+        .await
+        .context("error while parsing the hosts file")
+}
+
+pub async fn parse_denylist_file(path: &Path, denylist: &mut Denylist) -> anyhow::Result<()> {
+    parse_list_file(path, denylist)
+        .await
+        .context("error while parsing the denylist file")
+}
+
+async fn parse_list_file<T: EntryFromStr>(path: &Path, processor: &mut T) -> anyhow::Result<()> {
     let mut file = BufReader::new(
         File::open(path)
             .await
-            .with_context(|| format!("error while opening the blacklist file '{:?}'", path))?,
+            .map_err(|e| anyhow::anyhow!("error while opening the file {:?}: {}", path, e))?,
     );
 
     let mut line = String::new();
@@ -98,60 +170,42 @@ pub async fn parse_blacklist_file(path: &Path, blacklist: &mut Blacklist) -> any
         if file
             .read_line(&mut line)
             .await
-            .context("error while reading a line from the blacklist file")?
+            .context("error while reading a line")?
             == 0
         {
             // Reached EOF
             break;
         }
 
+        // Remove any leading whitespaces
+        let trimmed_len = line.trim_start().len();
+        let domain_start_idx = line.len() - trimmed_len;
+        let remaining_line = &mut line[domain_start_idx..];
+
         // Skip comments and empty lines
-        if line.is_empty() || line.trim_start().starts_with('#') {
+        if remaining_line.is_empty() || remaining_line.starts_with('#') {
             continue;
-        };
+        }
 
-        let remaining_line = {
-            let trimmed_len = line.trim_start().len();
-            let domain_start_idx = line.len() - trimmed_len;
-            let remaining_line = &mut line.as_mut_str()[domain_start_idx..];
-
-            if remaining_line.starts_with('/') {
-                // It's a regex
-                let Ok((regex, remaining_line)) = parse_regex(remaining_line) else {
-                    // Malformed regex
-                    continue;
-                };
-                let regex = match Regex::new(regex) {
-                    Ok(regex) => regex,
-                    Err(e) => {
-                        tracing::debug!(%regex, "Error while parsing a regex: {}", e);
-                        continue;
-                    }
-                };
-                blacklist.add_regex(regex);
-                remaining_line
-            } else {
-                // It should be a domain name otherwise
-                let Some((domain, remaining_line)) = parse_domain_name(remaining_line) else {
-                    // Malformed domain
-                    tracing::debug!("Error while parsing a domain: {}", remaining_line);
-                    continue;
-                };
-
-                blacklist.add_entry(hash_to_u128(domain, None));
-                remaining_line
-            }
-        };
-
-        // TODO: store labels in the blacklist for future use
-        let _label = remaining_line.find('[').and_then(|label_start_idx| {
-            remaining_line[label_start_idx..]
-                .find(']')
-                .map(|label_end_idx| remaining_line.get(label_start_idx + 1..label_end_idx))
-        });
+        if let Err(e) = processor.process_line(remaining_line) {
+            tracing::debug!(
+                "Error while processing the line '{}': {}",
+                remaining_line,
+                e
+            );
+            continue;
+        }
     }
 
     Ok(())
+}
+
+fn parse_label(line: &str) -> Option<&str> {
+    line.find('[').and_then(|label_start_idx| {
+        line[label_start_idx..]
+            .find(']')
+            .and_then(|label_end_idx| line.get(label_start_idx + 1..label_end_idx))
+    })
 }
 
 /// Parses a regex formatted like `/<re>/`
@@ -229,6 +283,12 @@ fn parse_domain_name(line: &mut str) -> Option<(&mut str, &mut str)> {
         // Bad TLD: 'example.b' or 'example.t3st'
         None
     } else {
-        Some(line.split_at_mut(domain_length))
+        let (domain, remaining_line) = line.split_at_mut(domain_length);
+
+        // Account for any leading whitespaces in the remaining line
+        let whitespace_length = remaining_line.len() - remaining_line.trim_start().len();
+        let remaining_line = &mut remaining_line[whitespace_length..];
+
+        Some((domain, remaining_line))
     }
 }

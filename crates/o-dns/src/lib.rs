@@ -2,7 +2,7 @@ mod logging;
 use cache::Cache;
 pub use logging::setup_logging;
 mod hosts;
-pub use hosts::{Blacklist, Whitelist};
+pub use hosts::{Denylist, Hosts};
 mod upstream;
 pub use upstream::resolve_with_upstream;
 mod cache;
@@ -19,8 +19,8 @@ pub const MAX_STANDARD_DNS_MSG_SIZE: usize = 512;
 
 pub struct State {
     pub upstream_resolver: SocketAddr,
-    pub blacklist: RwLock<Blacklist>,
-    pub hosts: RwLock<Whitelist>,
+    pub denylist: RwLock<Denylist>,
+    pub hosts: RwLock<Hosts>,
     pub cache: RwLock<Cache>,
 }
 
@@ -28,7 +28,7 @@ impl State {
     pub fn new() -> Self {
         State {
             upstream_resolver: "1.1.1.1:53".parse().expect("shouldn't have failed"),
-            blacklist: Default::default(),
+            denylist: Default::default(),
             hosts: Default::default(),
             cache: Default::default(),
         }
