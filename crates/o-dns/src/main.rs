@@ -240,6 +240,9 @@ async fn handle_query(
                 }
             });
 
+            // Set the AD bit
+            response_packet.header.z[1] = cached_response.authenticated_data;
+
             tracing::debug!(
                 qname = ?question.qname,
                 qtype = ?question.query_type,
@@ -402,31 +405,25 @@ async fn handle_query(
             break 'caching;
         }
 
-        let mut cache = state.cache.write().await;
-        // Set an empty cache record in case there are no records in the response
-        cache.set_empty(hash, cache_for);
-
+        let mut cached_rrs = Vec::with_capacity(
+            response_packet.answers.len()
+                + response_packet.authorities.len()
+                + response_packet.additionals.len(),
+        );
         response_packet.answers.iter().for_each(|rr| {
-            cache.set(
-                hash,
-                CachedRecord::new(rr.clone(), CacheRecordKind::Answer),
-                cache_for,
-            )
+            cached_rrs.push(CachedRecord::new(rr.clone(), CacheRecordKind::Answer));
         });
         response_packet.authorities.iter().for_each(|rr| {
-            cache.set(
-                hash,
-                CachedRecord::new(rr.clone(), CacheRecordKind::Authority),
-                cache_for,
-            )
+            cached_rrs.push(CachedRecord::new(rr.clone(), CacheRecordKind::Authority));
         });
         response_packet.additionals.iter().for_each(|rr| {
-            cache.set(
-                hash,
-                CachedRecord::new(rr.clone(), CacheRecordKind::Additional),
-                cache_for,
-            )
+            cached_rrs.push(CachedRecord::new(rr.clone(), CacheRecordKind::Additional));
         });
+
+        if !cached_rrs.is_empty() {
+            let mut cache = state.cache.write().await;
+            cache.set_many(hash, cached_rrs, cache_for, response_packet.header.z[1]);
+        }
     };
 
     Ok(dst.into_inner().into_owned())

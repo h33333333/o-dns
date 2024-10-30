@@ -12,6 +12,7 @@ pub struct CachedRecord {
     pub resource_data: ResourceData<'static>,
     pub qname: String,
     pub ttl: u32,
+    pub class: u16,
     pub kind: CacheRecordKind,
 }
 
@@ -19,6 +20,7 @@ pub struct CacheEntry {
     pub records: Vec<CachedRecord>,
     pub added: Instant,
     pub ttd: u32,
+    pub authenticated_data: bool,
 }
 
 impl CachedRecord {
@@ -28,6 +30,7 @@ impl CachedRecord {
             resource_data: value.resource_data,
             ttl: value.ttl,
             kind,
+            class: value.class,
         }
     }
 
@@ -40,7 +43,7 @@ impl CachedRecord {
             self.qname.to_owned().into(),
             self.resource_data.clone(),
             Some(ttl),
-            None,
+            Some(self.class),
         )
     }
 }
@@ -56,13 +59,38 @@ impl Cache {
     }
 
     // TODO: I also need to cache the source of the response (for AA flag)
-    pub fn set(&mut self, key: u128, value: CachedRecord, cache_for: u32) {
+    pub fn set(
+        &mut self,
+        key: u128,
+        value: CachedRecord,
+        cache_for: u32,
+        authenticated_data: bool,
+    ) {
         let cache = self.internal.entry(key).or_insert_with(|| CacheEntry {
             records: vec![],
             ttd: cache_for,
             added: Instant::now(),
+            authenticated_data,
         });
         cache.records.push(value);
+    }
+
+    pub fn set_many(
+        &mut self,
+        key: u128,
+        values: Vec<CachedRecord>,
+        cache_for: u32,
+        authenticated_data: bool,
+    ) {
+        self.internal.insert(
+            key,
+            CacheEntry {
+                records: values,
+                ttd: cache_for,
+                added: Instant::now(),
+                authenticated_data,
+            },
+        );
     }
 
     pub fn set_empty(&mut self, key: u128, cache_for: u32) {
@@ -72,6 +100,7 @@ impl Cache {
                 records: vec![],
                 ttd: cache_for,
                 added: Instant::now(),
+                authenticated_data: false,
             },
         );
     }
