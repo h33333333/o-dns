@@ -12,8 +12,8 @@ use proptest::prelude::*;
 use crate::{QueryType, Question, ResourceData, ResourceRecord};
 
 prop_compose! {
-    pub fn arb_question()(qname in arb_qname(), query_type: QueryType) -> Question<'static> {
-        Question { qname, query_type }
+    pub fn arb_question()(qname in arb_qname(), query_type: QueryType, qclass: u16) -> Question<'static> {
+        Question { qname, query_type, qclass}
     }
 }
 

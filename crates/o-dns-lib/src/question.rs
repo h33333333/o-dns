@@ -1,4 +1,6 @@
-use crate::{buf::EncodedSize, utils::get_max_encoded_qname_size, ByteBuf, EncodeToBuf, FromBuf};
+use crate::{
+    buf::EncodedSize, utils::get_max_encoded_qname_size, ByteBuf, EncodeToBuf, FromBuf, IN_CLASS,
+};
 use anyhow::Context;
 use std::{borrow::Cow, collections::HashMap};
 
@@ -49,13 +51,15 @@ impl From<QueryType> for u16 {
 pub struct Question<'a> {
     pub qname: Cow<'a, str>,
     pub query_type: QueryType,
+    pub qclass: u16,
 }
 
 impl<'a> Question<'a> {
-    pub fn new(qname: &'a str, query_type: QueryType) -> Self {
+    pub fn new(qname: &'a str, query_type: QueryType, qclass: Option<u16>) -> Self {
         Self {
             qname: Cow::Borrowed(qname),
             query_type,
+            qclass: qclass.unwrap_or(IN_CLASS),
         }
     }
 
@@ -63,6 +67,7 @@ impl<'a> Question<'a> {
         Question {
             qname: self.qname.into_owned().into(),
             query_type: self.query_type,
+            qclass: self.qclass,
         }
     }
 }
@@ -71,12 +76,12 @@ impl<'a> FromBuf for Question<'a> {
     fn from_buf(buf: &mut ByteBuf) -> anyhow::Result<Question<'static>> {
         let qname = buf.read_qname().context("QNAME is missing")?;
         let qtype_raw = buf.read_u16().context("QTYPE is missing")?;
-        // Class will always be IN, so skip it
-        let _ = buf.read_u16().context("QCLASS is missing")?;
+        let class = buf.read_u16().context("QCLASS is missing")?;
 
         Ok(Question {
             qname,
             query_type: qtype_raw.into(),
+            qclass: class,
         })
     }
 }
@@ -96,8 +101,7 @@ impl<'a> EncodeToBuf for Question<'a> {
             .context("writing QNAME")?;
         buf.write_u16(self.query_type.into())
             .context("writing QTYPE")?;
-        // IN
-        buf.write_u16(1).context("writing QCLASS")?;
+        buf.write_u16(self.qclass).context("writing QCLASS")?;
 
         Ok(encoded_size)
     }

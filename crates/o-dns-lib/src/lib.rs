@@ -20,6 +20,8 @@ use anyhow::Context;
 use core::str;
 use std::collections::HashMap;
 
+pub const IN_CLASS: u16 = 1;
+
 #[derive(Debug, PartialEq, Eq, Default, Clone)]
 pub struct DnsPacket<'a> {
     pub header: DnsHeader,
@@ -399,7 +401,7 @@ mod tests {
         // Add questions
         dns_packet
             .questions
-            .push(Question::new("test.com", QueryType::A));
+            .push(Question::new("test.com", QueryType::A, None));
 
         let mut buf = ByteBuf::new_empty(None);
         // 12 bytes are enough only for the header
@@ -426,7 +428,7 @@ mod tests {
         // Add questions
         dns_packet
             .questions
-            .push(Question::new("test.com", QueryType::A));
+            .push(Question::new("test.com", QueryType::A, None));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
             "test.com".into(),
@@ -465,7 +467,7 @@ mod tests {
         // Add questions
         dns_packet
             .questions
-            .push(Question::new("test.com", QueryType::A));
+            .push(Question::new("test.com", QueryType::A, None));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
             "test.com".into(),
@@ -509,7 +511,7 @@ mod tests {
         // Add questions
         dns_packet
             .questions
-            .push(Question::new("test.com", QueryType::A));
+            .push(Question::new("test.com", QueryType::A, None));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
             "test.com".into(),
@@ -555,7 +557,7 @@ mod tests {
         // Add questions
         dns_packet
             .questions
-            .push(Question::new("test.com", QueryType::A));
+            .push(Question::new("test.com", QueryType::A, None));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
             "test.com".into(),
@@ -621,7 +623,7 @@ mod tests {
         // Add questions
         dns_packet
             .questions
-            .push(Question::new("test.com", QueryType::A));
+            .push(Question::new("test.com", QueryType::A, None));
         // Add OPT RR
         dns_packet.additionals.push(ResourceRecord::new(
             "".into(),
