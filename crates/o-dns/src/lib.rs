@@ -6,7 +6,6 @@ pub use hosts::{Denylist, Hosts};
 mod upstream;
 pub use upstream::resolve_with_upstream;
 mod cache;
-pub use cache::{CacheRecordKind, CachedRecord};
 pub mod util;
 
 use std::net::SocketAddr;
@@ -16,6 +15,8 @@ use tokio::sync::RwLock;
 pub const DEFAULT_EDNS_BUF_CAPACITY: usize = 1232;
 /// RFC1035
 pub const MAX_STANDARD_DNS_MSG_SIZE: usize = 512;
+// EDNS DO BIT
+pub const EDNS_DO_BIT: u32 = 1 << 15;
 
 pub struct State {
     pub upstream_resolver: SocketAddr,

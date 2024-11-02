@@ -1,10 +1,8 @@
 use anyhow::Context as _;
-use o_dns::util::{
-    get_dns_query_hash, get_edns_rr, get_empty_dns_packet, parse_denylist_file, parse_hosts_file,
-};
+use o_dns::util::{get_response_dns_packet, parse_denylist_file, parse_hosts_file};
 use o_dns::{
-    resolve_with_upstream, setup_logging, CacheRecordKind, CachedRecord, State,
-    DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE,
+    resolve_with_upstream, setup_logging, State, DEFAULT_EDNS_BUF_CAPACITY,
+    MAX_STANDARD_DNS_MSG_SIZE,
 };
 use o_dns_lib::{ByteBuf, DnsPacket, QueryType, ResourceData, ResourceRecord, ResponseCode};
 use o_dns_lib::{EncodeToBuf as _, FromBuf as _};
@@ -149,108 +147,54 @@ async fn handle_query(
     state: Arc<State>,
     is_using_tcp: bool,
 ) -> anyhow::Result<Vec<u8>> {
-    // Use the smallest EDNS buf size from the requestor's and resolver's buf sizes if EDNS was requested
-    let edns_buf_length = parsed_packet.as_ref().ok().and_then(|packet| {
+    let requestor_edns_buf_size = parsed_packet.as_ref().ok().and_then(|packet| {
         packet.edns.and_then(|idx| {
             packet
                 .additionals
                 .get(idx)
                 .and_then(ResourceRecord::get_edns_data)
-                .map(|data| data.udp_payload_size.min(DEFAULT_EDNS_BUF_CAPACITY))
+                .map(|data| data.udp_payload_size)
         })
     });
 
-    // Create an empty response packet
-    let mut response_packet = get_empty_dns_packet(
-        None,
-        parsed_packet.as_ref().ok().map(|packet| &packet.header),
-        edns_buf_length,
-    );
+    // Create an empty response packet and copy the relevant settings from the query
+    let mut response_packet = get_response_dns_packet(parsed_packet.as_ref().ok(), None);
 
-    let (hash, from_cache) = 'packet: {
-        let Ok(packet) = parsed_packet.as_ref() else {
+    let from_cache: bool = 'packet: {
+        let Ok(query_packet) = parsed_packet.as_ref() else {
             response_packet.header.response_code = ResponseCode::FormatError;
-            break 'packet (None, false);
+            break 'packet false;
         };
 
-        if packet.header.question_count > 1 || packet.questions.len() > 1 {
+        if query_packet.header.question_count > 1 || query_packet.questions.len() > 1 {
             response_packet.header.response_code = ResponseCode::FormatError;
-            break 'packet (None, false);
+            break 'packet false;
         }
 
-        let question = &packet.questions[0];
+        let question = &query_packet.questions[0];
 
-        // Calculate hash of the query for caching and cache lookup
-        let hash = Some(get_dns_query_hash(
-            &packet.header,
-            question,
-            packet.edns.and_then(|idx| packet.additionals.get(idx)),
-        ));
+        let enable_dnssec = if let Some(edns_data) = query_packet.edns.and_then(|idx| {
+            query_packet
+                .additionals
+                .get(idx)
+                .and_then(|rr| rr.get_edns_data())
+        }) {
+            edns_data.dnssec_ok_bit
+        } else {
+            false
+        };
 
-        'cache_lookup: {
-            let cache = state.cache.read().await;
-            let Some(cached_response) = cache.get(hash.as_ref().unwrap()) else {
-                tracing::debug!(
-                    qname = ?question.qname,
-                    qtype = ?question.query_type,
-                    "Cache miss"
-                );
-                break 'cache_lookup;
-            };
+        // Check if query is cached
+        let cache = state.cache.read().await;
+        let used_cache = cache.question_lookup(question, &mut response_packet, enable_dnssec);
 
-            // Response for this query is cached. Check if cache isn't stale
-            if (cached_response.added.elapsed().as_secs() as u32) >= cached_response.ttd {
-                tracing::debug!(
-                    qname = ?question.qname,
-                    qtype = ?question.query_type,
-                    "Found entry in cache, but it's stale. Doing a lookup"
-                );
-                break 'cache_lookup;
-            }
-
-            // Cache entry is not stale, use it as a response
-            cached_response.records.iter().for_each(|cached_record| {
-                if cached_record.resource_data.get_query_type() == QueryType::OPT {
-                    // Override OPT RR if it's present
-                    response_packet
-                        .edns
-                        .and_then(|idx| response_packet.additionals.get_mut(idx))
-                        .into_iter()
-                        .for_each(|opt_rr| {
-                            // Override the stub OPT RR that was set when creating an empty response packet
-                            *opt_rr = cached_record.into_rr(&cached_response.added);
-                        });
-                    return;
-                }
-
-                let rr = cached_record.into_rr(&cached_response.added);
-                match cached_record.kind {
-                    CacheRecordKind::Answer => {
-                        response_packet.answers.push(rr);
-                        response_packet.header.answer_rr_count += 1;
-                    }
-                    CacheRecordKind::Authority => {
-                        response_packet.authorities.push(rr);
-                        response_packet.header.authority_rr_count += 1;
-                    }
-                    CacheRecordKind::Additional => {
-                        response_packet.additionals.push(rr);
-                        response_packet.header.additional_rr_count += 1;
-                    }
-                }
-            });
-
-            // Set the AD bit
-            response_packet.header.z[1] = cached_response.authenticated_data;
-
+        if used_cache {
             tracing::debug!(
                 qname = ?question.qname,
                 qtype = ?question.query_type,
-                remaining_time = (cached_response.ttd.saturating_sub(cached_response.added.elapsed().as_secs() as u32)),
                 "Cache hit"
             );
-
-            break 'packet (hash, true);
+            break 'packet true;
         }
 
         // Check if requested host is explicitly blacklisted
@@ -272,7 +216,7 @@ async fn handle_query(
                 response_packet.answers.push(rr);
                 response_packet.header.answer_rr_count += 1;
             }
-            break 'packet (hash, false);
+            break 'packet false;
         }
 
         if let Some(records) = state.hosts.read().await.get_entry(question.qname.as_ref()) {
@@ -289,13 +233,19 @@ async fn handle_query(
                     response_packet.answers.push(rr);
                     response_packet.header.answer_rr_count += 1;
                 });
-            break 'packet (hash, false);
+            break 'packet false;
         }
 
-        let mut upstream_response = match resolve_with_upstream(
-            // TODO: can cloning be avoided?
-            packet.clone(),
+        if !query_packet.header.recursion_desired {
+            // TODO: include root/TLD NS in authority section in this case
+            break 'packet false;
+        }
+
+        let upstream_response = match resolve_with_upstream(
+            question,
+            query_packet.header.id,
             state.upstream_resolver,
+            enable_dnssec,
         )
         .await
         {
@@ -303,42 +253,33 @@ async fn handle_query(
             Err(e) => {
                 response_packet.header.response_code = ResponseCode::ServerFailure;
                 tracing::debug!(resolver = ?state.upstream_resolver, "Error while forwarding a request to the upstream resolver: {}", e);
-                break 'packet (hash, false);
+                break 'packet false;
             }
         };
 
-        match upstream_response.edns {
-            Some(idx) => {
-                // Check if requestor supports EDNS
-                if edns_buf_length.is_none() {
-                    // Remove the OPT RR
-                    upstream_response.additionals.remove(idx);
-                    upstream_response.header.additional_rr_count -= 1;
-                } else {
-                    if let Some(edns_record) = upstream_response.additionals.get_mut(idx) {
-                        // Set the EDNS buffer size to the correct one for this resolver
-                        edns_record.class = DEFAULT_EDNS_BUF_CAPACITY as u16
-                    }
-                }
+        response_packet.questions = upstream_response.questions;
+        response_packet.header.question_count = upstream_response.header.question_count;
+
+        response_packet.answers = upstream_response.answers;
+        response_packet.header.answer_rr_count = upstream_response.header.answer_rr_count;
+
+        upstream_response.additionals.into_iter().for_each(|rr| {
+            // OPT RR is alredy present if EDNS is supported by the requestor
+            if rr.resource_data.get_query_type() != QueryType::OPT {
+                response_packet.additionals.push(rr);
+                response_packet.header.additional_rr_count += 1;
             }
-            None => {
-                // Add an OPT RR only if requestor supports EDNS
-                if let Some(buf_length) = edns_buf_length {
-                    let edns_idx = upstream_response.additionals.len();
-                    let edns_record = get_edns_rr(buf_length as u16, None);
-                    upstream_response.additionals.push(edns_record);
-                    upstream_response.header.additional_rr_count += 1;
-                    upstream_response.edns = Some(edns_idx);
-                }
-            }
+        });
+
+        response_packet.authorities = upstream_response.authorities;
+        response_packet.header.authority_rr_count = upstream_response.header.authority_rr_count;
+
+        // AD bit
+        if upstream_response.header.z[1] {
+            response_packet.header.z[1] = true;
         }
 
-        // Forward the upstream response to the requestor
-        response_packet = upstream_response;
-        // This response is not authoritative
-        response_packet.header.is_authoritative = false;
-
-        (hash, false)
+        false
     };
 
     // Add original questions to the response if possible and wasn't done before
@@ -355,76 +296,17 @@ async fn handle_query(
         .encode_to_buf(
             &mut dst,
             // UDP: truncate the response if the requestor's buffer is too small
-            (!is_using_tcp).then(|| edns_buf_length.unwrap_or(MAX_STANDARD_DNS_MSG_SIZE)),
+            (!is_using_tcp).then(|| requestor_edns_buf_size.unwrap_or(MAX_STANDARD_DNS_MSG_SIZE)),
         )
         .context("error while encoding the response")?;
 
-    // Response caching
-    'caching: {
-        if from_cache {
-            // Cache the response only if it didn't come from the cache already
-            break 'caching;
-        }
-
-        let Some(hash) = hash else {
-            // We can't cache anything if we didn't manage to calculate the hash
-            break 'caching;
-        };
-
-        let cache_for = match response_packet.header.response_code {
-            // Cache for the lowest TTL from all response RRs
-            ResponseCode::Success => {
-                // Cache for 5 mins by default
-                // TODO: fix this, as some responses can be cached for longer
-                let mut lowest_ttl = 60 * 5;
-                response_packet
-                    .answers
-                    .iter()
-                    .chain(response_packet.authorities.iter())
-                    .chain(response_packet.additionals.iter())
-                    .for_each(|rr| {
-                        if rr.resource_data.get_query_type() != QueryType::OPT {
-                            lowest_ttl = lowest_ttl.min(rr.ttl);
-                        }
-                    });
-                lowest_ttl
-            }
-            // Cache for 1 min
-            // TODO: cache NXDOMAIN for SOA TTL (or 1 min if SOA is missing)
-            ResponseCode::Refused | ResponseCode::NameError => 60,
-            // Cache for 30s
-            ResponseCode::ServerFailure => 30,
-            // Cache for 5 min
-            ResponseCode::NotImplemented => 60 * 5,
-            // Don't cache these responses
-            ResponseCode::FormatError | ResponseCode::Unknown => 0,
-        };
-
-        if cache_for < 15 {
-            // No point in caching packets with TTL lower than 15s IMO
-            break 'caching;
-        }
-
-        let mut cached_rrs = Vec::with_capacity(
-            response_packet.answers.len()
-                + response_packet.authorities.len()
-                + response_packet.additionals.len(),
-        );
-        response_packet.answers.iter().for_each(|rr| {
-            cached_rrs.push(CachedRecord::new(rr.clone(), CacheRecordKind::Answer));
-        });
-        response_packet.authorities.iter().for_each(|rr| {
-            cached_rrs.push(CachedRecord::new(rr.clone(), CacheRecordKind::Authority));
-        });
-        response_packet.additionals.iter().for_each(|rr| {
-            cached_rrs.push(CachedRecord::new(rr.clone(), CacheRecordKind::Additional));
-        });
-
-        if !cached_rrs.is_empty() {
-            let mut cache = state.cache.write().await;
-            cache.set_many(hash, cached_rrs, cache_for, response_packet.header.z[1]);
-        }
-    };
+    if !from_cache {
+        // Cache the response only if it didn't come from the cache already
+        let mut cache = state.cache.write().await;
+        cache
+            .cache_response(&response_packet)
+            .context("bug: caching has failed?")?;
+    }
 
     Ok(dst.into_inner().into_owned())
 }

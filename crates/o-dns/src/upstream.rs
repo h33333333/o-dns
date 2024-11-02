@@ -1,6 +1,6 @@
-use crate::{util::get_edns_rr, DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE};
+use crate::{util::get_query_dns_packet, DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE};
 use anyhow::Context as _;
-use o_dns_lib::{ByteBuf, DnsPacket, EncodeToBuf as _, FromBuf as _};
+use o_dns_lib::{ByteBuf, DnsPacket, EncodeToBuf as _, FromBuf as _, Question};
 use std::net::SocketAddr;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
@@ -8,29 +8,16 @@ use tokio::{
 };
 
 pub async fn resolve_with_upstream(
-    mut packet: DnsPacket<'_>,
+    question: &Question<'_>,
+    id: u16,
     upstream_resolver: SocketAddr,
+    enable_dnssec: bool,
 ) -> anyhow::Result<(DnsPacket<'static>, usize)> {
     let mut buf = ByteBuf::new_empty(Some(DEFAULT_EDNS_BUF_CAPACITY));
-    // Make sure that EDNS packet is present and contains correct settings for this resolver
-    if let Some(idx) = packet.edns {
-        let edns_record = packet
-            .additionals
-            .get_mut(idx)
-            .with_context(|| format!("malformed packet: EDNS is missing at idx {}", idx))?;
-        let should_change_buf_size = edns_record
-            .get_edns_data()
-            .is_some_and(|data| data.udp_payload_size != DEFAULT_EDNS_BUF_CAPACITY);
-        if should_change_buf_size {
-            edns_record.class = DEFAULT_EDNS_BUF_CAPACITY as u16;
-        }
-    } else {
-        let edns_idx = packet.additionals.len();
-        let edns_record = get_edns_rr(DEFAULT_EDNS_BUF_CAPACITY as u16, None);
-        packet.additionals.push(edns_record);
-        packet.header.additional_rr_count += 1;
-        packet.edns = Some(edns_idx);
-    }
+
+    let mut packet = get_query_dns_packet(Some(id), enable_dnssec);
+    packet.questions.push(question.clone());
+    packet.header.question_count += 1;
 
     let mut force_tcp = false;
     loop {

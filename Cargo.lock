@@ -276,6 +276,7 @@ name = "o-dns"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bitflags",
  "o-dns-lib",
  "regex",
  "sha1",
