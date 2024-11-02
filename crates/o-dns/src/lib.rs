@@ -6,7 +6,6 @@ pub use hosts::{Denylist, Hosts};
 mod upstream;
 pub use upstream::resolve_with_upstream;
 mod cache;
-pub use cache::{CacheRecordKind, CachedRecord};
 pub mod util;
 
 use std::net::SocketAddr;

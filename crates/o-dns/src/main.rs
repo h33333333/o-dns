@@ -1,10 +1,8 @@
 use anyhow::Context as _;
-use o_dns::util::{
-    get_dns_query_hash, get_response_dns_packet, parse_denylist_file, parse_hosts_file,
-};
+use o_dns::util::{get_response_dns_packet, parse_denylist_file, parse_hosts_file};
 use o_dns::{
-    resolve_with_upstream, setup_logging, CacheRecordKind, CachedRecord, State,
-    DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE,
+    resolve_with_upstream, setup_logging, State, DEFAULT_EDNS_BUF_CAPACITY,
+    MAX_STANDARD_DNS_MSG_SIZE,
 };
 use o_dns_lib::{ByteBuf, DnsPacket, QueryType, ResourceData, ResourceRecord, ResponseCode};
 use o_dns_lib::{EncodeToBuf as _, FromBuf as _};
@@ -162,97 +160,46 @@ async fn handle_query(
     // Create an empty response packet and copy the relevant settings from the query
     let mut response_packet = get_response_dns_packet(parsed_packet.as_ref().ok(), None);
 
-    let (hash, from_cache) = 'packet: {
+    let from_cache: bool = 'packet: {
         let Ok(query_packet) = parsed_packet.as_ref() else {
             response_packet.header.response_code = ResponseCode::FormatError;
-            break 'packet (None, false);
+            break 'packet false;
         };
 
         if query_packet.header.question_count > 1 || query_packet.questions.len() > 1 {
             response_packet.header.response_code = ResponseCode::FormatError;
-            break 'packet (None, false);
+            break 'packet false;
         }
 
         let question = &query_packet.questions[0];
 
-        // Calculate hash of the query for caching and cache lookup
-        let hash = Some(get_dns_query_hash(
-            &query_packet.header,
-            question,
+        let enable_dnssec = if let Some(edns_data) = query_packet.edns.and_then(|idx| {
             query_packet
-                .edns
-                .and_then(|idx| query_packet.additionals.get(idx)),
-        ));
+                .additionals
+                .get(idx)
+                .and_then(|rr| rr.get_edns_data())
+        }) {
+            edns_data.dnssec_ok_bit
+        } else {
+            false
+        };
 
-        'cache_lookup: {
-            let cache = state.cache.read().await;
-            let Some(cached_response) = cache.get(hash.as_ref().unwrap()) else {
-                tracing::debug!(
-                    qname = ?question.qname,
-                    qtype = ?question.query_type,
-                    "Cache miss"
-                );
-                break 'cache_lookup;
-            };
+        // Check if query is cached
+        let cache = state.cache.read().await;
+        let used_cache = cache.question_lookup(question, &mut response_packet, enable_dnssec);
 
-            // Response for this query is cached. Check if cache isn't stale
-            if (cached_response.added.elapsed().as_secs() as u32) >= cached_response.ttd {
-                tracing::debug!(
-                    qname = ?question.qname,
-                    qtype = ?question.query_type,
-                    "Found entry in cache, but it's stale. Doing a lookup"
-                );
-                break 'cache_lookup;
-            }
-
-            // Cache entry is not stale, use it as a response
-            cached_response.records.iter().for_each(|cached_record| {
-                // TODO: don't cache OPT RRs
-                if cached_record.resource_data.get_query_type() == QueryType::OPT {
-                    // Override OPT RR if it's present
-                    response_packet
-                        .edns
-                        .and_then(|idx| response_packet.additionals.get_mut(idx))
-                        .into_iter()
-                        .for_each(|opt_rr| {
-                            // Override the stub OPT RR that was set when creating an empty response packet
-                            *opt_rr = cached_record.into_rr(&cached_response.added);
-                        });
-                    return;
-                }
-
-                let rr = cached_record.into_rr(&cached_response.added);
-                match cached_record.kind {
-                    CacheRecordKind::Answer => {
-                        response_packet.answers.push(rr);
-                        response_packet.header.answer_rr_count += 1;
-                    }
-                    CacheRecordKind::Authority => {
-                        response_packet.authorities.push(rr);
-                        response_packet.header.authority_rr_count += 1;
-                    }
-                    CacheRecordKind::Additional => {
-                        response_packet.additionals.push(rr);
-                        response_packet.header.additional_rr_count += 1;
-                    }
-                }
-            });
-
+        if used_cache {
             tracing::debug!(
                 qname = ?question.qname,
                 qtype = ?question.query_type,
-                remaining_time = (cached_response.ttd.saturating_sub(cached_response.added.elapsed().as_secs() as u32)),
                 "Cache hit"
             );
-
-            break 'packet (hash, true);
+            break 'packet true;
         }
 
         // Check if requested host is explicitly blacklisted
         if state.denylist.read().await.contains_entry(&question.qname) {
             response_packet.header.is_authoritative = true;
-            // AD
-            response_packet.header.z[1] = true;
             let rdata: Option<ResourceData<'_>> = match question.query_type {
                 // Send only A records to ANY queries if blacklisted
                 QueryType::A | QueryType::ANY => Some(ResourceData::A {
@@ -269,13 +216,11 @@ async fn handle_query(
                 response_packet.answers.push(rr);
                 response_packet.header.answer_rr_count += 1;
             }
-            break 'packet (hash, false);
+            break 'packet false;
         }
 
         if let Some(records) = state.hosts.read().await.get_entry(question.qname.as_ref()) {
             response_packet.header.is_authoritative = true;
-            // AD
-            response_packet.header.z[1] = true;
             records
                 .iter()
                 .filter(|rdata| match question.query_type {
@@ -288,19 +233,13 @@ async fn handle_query(
                     response_packet.answers.push(rr);
                     response_packet.header.answer_rr_count += 1;
                 });
-            break 'packet (hash, false);
+            break 'packet false;
         }
 
-        let enable_dnssec = if let Some(edns_data) = query_packet.edns.and_then(|idx| {
-            query_packet
-                .additionals
-                .get(idx)
-                .and_then(|rr| rr.get_edns_data())
-        }) {
-            edns_data.dnssec_ok_bit
-        } else {
-            false
-        };
+        if !query_packet.header.recursion_desired {
+            // TODO: include root/TLD NS in authority section in this case
+            break 'packet false;
+        }
 
         let upstream_response = match resolve_with_upstream(
             question,
@@ -314,7 +253,7 @@ async fn handle_query(
             Err(e) => {
                 response_packet.header.response_code = ResponseCode::ServerFailure;
                 tracing::debug!(resolver = ?state.upstream_resolver, "Error while forwarding a request to the upstream resolver: {}", e);
-                break 'packet (hash, false);
+                break 'packet false;
             }
         };
 
@@ -340,7 +279,7 @@ async fn handle_query(
             response_packet.header.z[1] = true;
         }
 
-        (hash, false)
+        false
     };
 
     // Add original questions to the response if possible and wasn't done before
@@ -361,72 +300,13 @@ async fn handle_query(
         )
         .context("error while encoding the response")?;
 
-    // Response caching
-    'caching: {
-        if from_cache {
-            // Cache the response only if it didn't come from the cache already
-            break 'caching;
-        }
-
-        let Some(hash) = hash else {
-            // We can't cache anything if we didn't manage to calculate the hash
-            break 'caching;
-        };
-
-        let cache_for = match response_packet.header.response_code {
-            // Cache for the lowest TTL from all response RRs
-            ResponseCode::Success => {
-                // Cache for 5 mins by default
-                // TODO: fix this, as some responses can be cached for longer
-                let mut lowest_ttl = 60 * 5;
-                response_packet
-                    .answers
-                    .iter()
-                    .chain(response_packet.authorities.iter())
-                    .chain(response_packet.additionals.iter())
-                    .for_each(|rr| {
-                        if rr.resource_data.get_query_type() != QueryType::OPT {
-                            lowest_ttl = lowest_ttl.min(rr.ttl);
-                        }
-                    });
-                lowest_ttl
-            }
-            // Cache for 1 min
-            // TODO: cache NXDOMAIN for SOA TTL (or 1 min if SOA is missing)
-            ResponseCode::Refused | ResponseCode::NameError => 60,
-            // Cache for 30s
-            ResponseCode::ServerFailure => 30,
-            // Cache for 5 min
-            ResponseCode::NotImplemented => 60 * 5,
-            // Don't cache these responses
-            ResponseCode::FormatError | ResponseCode::Unknown => 0,
-        };
-
-        if cache_for < 15 {
-            // No point in caching packets with TTL lower than 15s IMO
-            break 'caching;
-        }
-
-        let mut cached_rrs = Vec::with_capacity(
-            response_packet.answers.len()
-                + response_packet.authorities.len()
-                + response_packet.additionals.len(),
-        );
-        response_packet.answers.iter().for_each(|rr| {
-            cached_rrs.push(CachedRecord::new(rr.clone(), CacheRecordKind::Answer));
-        });
-        response_packet.authorities.iter().for_each(|rr| {
-            cached_rrs.push(CachedRecord::new(rr.clone(), CacheRecordKind::Authority));
-        });
-        response_packet.additionals.iter().for_each(|rr| {
-            cached_rrs.push(CachedRecord::new(rr.clone(), CacheRecordKind::Additional));
-        });
-
-        if !cached_rrs.is_empty() {
-            let mut cache = state.cache.write().await;
-            cache.set_many(hash, cached_rrs, cache_for, response_packet.header.z[1]);
-        }
-    };
+    if !from_cache {
+        // Cache the response only if it didn't come from the cache already
+        let mut cache = state.cache.write().await;
+        cache
+            .cache_response(&response_packet)
+            .context("bug: caching has failed?")?;
+    }
 
     Ok(dst.into_inner().into_owned())
 }
