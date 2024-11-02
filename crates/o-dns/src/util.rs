@@ -8,7 +8,7 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
 };
 
-use crate::{Denylist, Hosts};
+use crate::{Denylist, Hosts, DEFAULT_EDNS_BUF_CAPACITY, EDNS_DO_BIT};
 
 trait EntryFromStr {
     fn process_line(&mut self, line: &mut str) -> anyhow::Result<()>;
@@ -70,34 +70,64 @@ impl EntryFromStr for Denylist {
     }
 }
 
-pub fn get_empty_dns_packet(
+pub fn get_response_dns_packet(
+    request_packet: Option<&DnsPacket>,
     response_code: Option<ResponseCode>,
-    request_header: Option<&DnsHeader>,
-    edns_buf_size: Option<usize>,
 ) -> DnsPacket<'static> {
     let mut packet = DnsPacket::new();
     packet.header.is_response = true;
     packet.header.recursion_available = true;
-    if let Some(buf_size) = edns_buf_size {
-        packet.additionals.push(get_edns_rr(buf_size as u16, None));
-        packet.header.additional_rr_count += 1;
-        packet.edns = Some(0);
-    }
+    if let Some(request_packet) = request_packet {
+        packet.header.id = request_packet.header.id;
+        packet.header.recursion_desired = request_packet.header.recursion_desired;
+        // CD bit
+        packet.header.z[2] = request_packet.header.z[2];
+        // Include OPT RR if requestor supports EDNS
+        if let Some(edns_data) = request_packet.edns.and_then(|idx| {
+            request_packet
+                .additionals
+                .get(idx)
+                .and_then(|rr| rr.get_edns_data())
+        }) {
+            let flags = edns_data.dnssec_ok_bit.then_some(EDNS_DO_BIT);
+            packet
+                .additionals
+                .push(get_edns_rr(DEFAULT_EDNS_BUF_CAPACITY as u16, None, flags));
+            packet.header.additional_rr_count += 1;
+            packet.edns = Some(0);
+        }
+    };
     if let Some(rcode) = response_code {
         packet.header.response_code = rcode;
-    }
-    if let Some(header) = request_header {
-        packet.header.id = header.id;
-        packet.header.recursion_desired = header.recursion_desired;
     }
     packet
 }
 
-pub fn get_edns_rr(buf_size: u16, options: Option<HashMap<u16, Cow<'_, [u8]>>>) -> ResourceRecord {
+pub fn get_query_dns_packet(id: Option<u16>, enable_dnssec: bool) -> DnsPacket<'static> {
+    let mut packet = DnsPacket::new();
+    packet.header.id = id.unwrap_or_default();
+    packet.header.recursion_desired = true;
+    // AD bit
+    packet.header.z[1] = true;
+    // EDNS
+    let flags = enable_dnssec.then_some(EDNS_DO_BIT);
+    packet
+        .additionals
+        .push(get_edns_rr(DEFAULT_EDNS_BUF_CAPACITY as u16, None, flags));
+    packet.header.additional_rr_count += 1;
+    packet.edns = Some(0);
+    packet
+}
+
+pub fn get_edns_rr(
+    buf_size: u16,
+    options: Option<HashMap<u16, Cow<'_, [u8]>>>,
+    flags: Option<u32>,
+) -> ResourceRecord {
     ResourceRecord::new(
         "".into(),
         ResourceData::OPT { options },
-        Some(0),
+        flags,
         Some(buf_size),
     )
 }

@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use o_dns::util::{
-    get_dns_query_hash, get_edns_rr, get_empty_dns_packet, parse_denylist_file, parse_hosts_file,
+    get_dns_query_hash, get_response_dns_packet, parse_denylist_file, parse_hosts_file,
 };
 use o_dns::{
     resolve_with_upstream, setup_logging, CacheRecordKind, CachedRecord, State,
@@ -149,42 +149,39 @@ async fn handle_query(
     state: Arc<State>,
     is_using_tcp: bool,
 ) -> anyhow::Result<Vec<u8>> {
-    // Use the smallest EDNS buf size from the requestor's and resolver's buf sizes if EDNS was requested
-    let edns_buf_length = parsed_packet.as_ref().ok().and_then(|packet| {
+    let requestor_edns_buf_size = parsed_packet.as_ref().ok().and_then(|packet| {
         packet.edns.and_then(|idx| {
             packet
                 .additionals
                 .get(idx)
                 .and_then(ResourceRecord::get_edns_data)
-                .map(|data| data.udp_payload_size.min(DEFAULT_EDNS_BUF_CAPACITY))
+                .map(|data| data.udp_payload_size)
         })
     });
 
-    // Create an empty response packet
-    let mut response_packet = get_empty_dns_packet(
-        None,
-        parsed_packet.as_ref().ok().map(|packet| &packet.header),
-        edns_buf_length,
-    );
+    // Create an empty response packet and copy the relevant settings from the query
+    let mut response_packet = get_response_dns_packet(parsed_packet.as_ref().ok(), None);
 
     let (hash, from_cache) = 'packet: {
-        let Ok(packet) = parsed_packet.as_ref() else {
+        let Ok(query_packet) = parsed_packet.as_ref() else {
             response_packet.header.response_code = ResponseCode::FormatError;
             break 'packet (None, false);
         };
 
-        if packet.header.question_count > 1 || packet.questions.len() > 1 {
+        if query_packet.header.question_count > 1 || query_packet.questions.len() > 1 {
             response_packet.header.response_code = ResponseCode::FormatError;
             break 'packet (None, false);
         }
 
-        let question = &packet.questions[0];
+        let question = &query_packet.questions[0];
 
         // Calculate hash of the query for caching and cache lookup
         let hash = Some(get_dns_query_hash(
-            &packet.header,
+            &query_packet.header,
             question,
-            packet.edns.and_then(|idx| packet.additionals.get(idx)),
+            query_packet
+                .edns
+                .and_then(|idx| query_packet.additionals.get(idx)),
         ));
 
         'cache_lookup: {
@@ -210,6 +207,7 @@ async fn handle_query(
 
             // Cache entry is not stale, use it as a response
             cached_response.records.iter().for_each(|cached_record| {
+                // TODO: don't cache OPT RRs
                 if cached_record.resource_data.get_query_type() == QueryType::OPT {
                     // Override OPT RR if it's present
                     response_packet
@@ -240,9 +238,6 @@ async fn handle_query(
                 }
             });
 
-            // Set the AD bit
-            response_packet.header.z[1] = cached_response.authenticated_data;
-
             tracing::debug!(
                 qname = ?question.qname,
                 qtype = ?question.query_type,
@@ -256,6 +251,8 @@ async fn handle_query(
         // Check if requested host is explicitly blacklisted
         if state.denylist.read().await.contains_entry(&question.qname) {
             response_packet.header.is_authoritative = true;
+            // AD
+            response_packet.header.z[1] = true;
             let rdata: Option<ResourceData<'_>> = match question.query_type {
                 // Send only A records to ANY queries if blacklisted
                 QueryType::A | QueryType::ANY => Some(ResourceData::A {
@@ -277,6 +274,8 @@ async fn handle_query(
 
         if let Some(records) = state.hosts.read().await.get_entry(question.qname.as_ref()) {
             response_packet.header.is_authoritative = true;
+            // AD
+            response_packet.header.z[1] = true;
             records
                 .iter()
                 .filter(|rdata| match question.query_type {
@@ -292,10 +291,22 @@ async fn handle_query(
             break 'packet (hash, false);
         }
 
-        let mut upstream_response = match resolve_with_upstream(
-            // TODO: can cloning be avoided?
-            packet.clone(),
+        let enable_dnssec = if let Some(edns_data) = query_packet.edns.and_then(|idx| {
+            query_packet
+                .additionals
+                .get(idx)
+                .and_then(|rr| rr.get_edns_data())
+        }) {
+            edns_data.dnssec_ok_bit
+        } else {
+            false
+        };
+
+        let upstream_response = match resolve_with_upstream(
+            question,
+            query_packet.header.id,
             state.upstream_resolver,
+            enable_dnssec,
         )
         .await
         {
@@ -307,36 +318,27 @@ async fn handle_query(
             }
         };
 
-        match upstream_response.edns {
-            Some(idx) => {
-                // Check if requestor supports EDNS
-                if edns_buf_length.is_none() {
-                    // Remove the OPT RR
-                    upstream_response.additionals.remove(idx);
-                    upstream_response.header.additional_rr_count -= 1;
-                } else {
-                    if let Some(edns_record) = upstream_response.additionals.get_mut(idx) {
-                        // Set the EDNS buffer size to the correct one for this resolver
-                        edns_record.class = DEFAULT_EDNS_BUF_CAPACITY as u16
-                    }
-                }
-            }
-            None => {
-                // Add an OPT RR only if requestor supports EDNS
-                if let Some(buf_length) = edns_buf_length {
-                    let edns_idx = upstream_response.additionals.len();
-                    let edns_record = get_edns_rr(buf_length as u16, None);
-                    upstream_response.additionals.push(edns_record);
-                    upstream_response.header.additional_rr_count += 1;
-                    upstream_response.edns = Some(edns_idx);
-                }
-            }
-        }
+        response_packet.questions = upstream_response.questions;
+        response_packet.header.question_count = upstream_response.header.question_count;
 
-        // Forward the upstream response to the requestor
-        response_packet = upstream_response;
-        // This response is not authoritative
-        response_packet.header.is_authoritative = false;
+        response_packet.answers = upstream_response.answers;
+        response_packet.header.answer_rr_count = upstream_response.header.answer_rr_count;
+
+        upstream_response.additionals.into_iter().for_each(|rr| {
+            // OPT RR is alredy present if EDNS is supported by the requestor
+            if rr.resource_data.get_query_type() != QueryType::OPT {
+                response_packet.additionals.push(rr);
+                response_packet.header.additional_rr_count += 1;
+            }
+        });
+
+        response_packet.authorities = upstream_response.authorities;
+        response_packet.header.authority_rr_count = upstream_response.header.authority_rr_count;
+
+        // AD bit
+        if upstream_response.header.z[1] {
+            response_packet.header.z[1] = true;
+        }
 
         (hash, false)
     };
@@ -355,7 +357,7 @@ async fn handle_query(
         .encode_to_buf(
             &mut dst,
             // UDP: truncate the response if the requestor's buffer is too small
-            (!is_using_tcp).then(|| edns_buf_length.unwrap_or(MAX_STANDARD_DNS_MSG_SIZE)),
+            (!is_using_tcp).then(|| requestor_edns_buf_size.unwrap_or(MAX_STANDARD_DNS_MSG_SIZE)),
         )
         .context("error while encoding the response")?;
 
