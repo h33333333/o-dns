@@ -31,6 +31,8 @@ pub trait EncodedSize {
 
 pub struct ByteBuf<'a> {
     buf: Cow<'a, [u8]>,
+    // TODO: make writing to this buf respect `pos` to allow reusing buffer with existing data
+    // for writing without clearing it first
     pos: usize,
 }
 
@@ -45,6 +47,12 @@ impl<'a> Deref for ByteBuf<'a> {
 impl<'a> DerefMut for ByteBuf<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.buf.to_mut()
+    }
+}
+
+impl<'a> AsRef<[u8]> for ByteBuf<'a> {
+    fn as_ref(&self) -> &[u8] {
+        &self.buf
     }
 }
 

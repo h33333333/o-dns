@@ -1,11 +1,13 @@
 mod logging;
-use cache::Cache;
 pub use logging::setup_logging;
 mod hosts;
 pub use hosts::{Denylist, Hosts};
-mod upstream;
-pub use upstream::resolve_with_upstream;
 mod cache;
+use cache::Cache;
+mod connection;
+pub use connection::Connection;
+mod resolver;
+pub use resolver::resolve_query;
 pub mod util;
 
 use std::net::SocketAddr;
