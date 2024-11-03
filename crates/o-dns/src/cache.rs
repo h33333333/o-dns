@@ -203,6 +203,20 @@ impl CachedRecord {
         hasher.update(qtype.to_be_bytes());
         hasher.update(self.class.to_be_bytes());
 
+        // Hash the rdata
+        match &self.resource_data {
+            ResourceData::UNKNOWN { rdata, .. } => {
+                hasher.update(rdata);
+            }
+            ResourceData::A { address } => {
+                hasher.update(address.octets());
+            }
+            ResourceData::NS { ns_domain_name } => hasher.update(ns_domain_name.as_bytes()),
+            ResourceData::CNAME { cname } => hasher.update(cname.as_bytes()),
+            ResourceData::AAAA { address } => hasher.update(&address.octets()),
+            ResourceData::OPT { .. } => unreachable!("bug: we shouldn't cache OPT RRs"),
+        };
+
         let hash = hasher.finalize();
 
         u128::from_be_bytes(hash[..16].try_into().unwrap())
