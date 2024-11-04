@@ -7,7 +7,7 @@ use cache::Cache;
 mod connection;
 pub use connection::Connection;
 mod resolver;
-pub use resolver::resolve_query;
+pub use resolver::Resolver;
 pub mod util;
 
 use std::net::SocketAddr;

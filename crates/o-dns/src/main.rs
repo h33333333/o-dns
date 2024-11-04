@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use o_dns::util::{parse_denylist_file, parse_hosts_file};
-use o_dns::{resolve_query, setup_logging, Connection, State, DEFAULT_EDNS_BUF_CAPACITY};
+use o_dns::{setup_logging, Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 use o_dns_lib::FromBuf as _;
 use o_dns_lib::{ByteBuf, DnsPacket};
 use std::ops::DerefMut;
@@ -42,6 +42,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("error while creating a TcpListener")?;
 
+    let resolver = Arc::new(Resolver::new(state.clone()));
+
     let mut recv = ByteBuf::new_from_vec(vec![0; DEFAULT_EDNS_BUF_CAPACITY]);
     let mut handlers: JoinSet<HandlerResult> = JoinSet::new();
     loop {
@@ -79,12 +81,10 @@ async fn main() -> anyhow::Result<()> {
         };
 
         let mut reader = ByteBuf::new(&recv);
-        handlers.spawn(resolve_query(
-            connection,
-            DnsPacket::from_buf(&mut reader),
-            state.clone(),
-        ));
-
-        recv.reset_pos();
+        handlers.spawn(
+            resolver
+                .clone()
+                .resolve_query(connection, DnsPacket::from_buf(&mut reader)),
+        );
     }
 }
