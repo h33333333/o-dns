@@ -72,11 +72,7 @@ impl Resolver {
                 .cache_lookup(question, &mut response_packet, dnssec)
                 .await
             {
-                tracing::debug!(
-                    qname = ?question.qname,
-                    qtype = ?question.query_type,
-                    "Cache hit"
-                );
+                // Cache hit
                 break 'resolve true;
             }
 

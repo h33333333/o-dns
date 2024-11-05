@@ -99,7 +99,7 @@ impl Cache {
             qname = ?question.qname,
             qtype = ?question.query_type,
             remaining_time = (cached_query.ttd.saturating_sub(cached_query.added.elapsed().as_secs() as u32)),
-            "Found cached query"
+            "Cache hit"
         );
 
         // Check whether other queries didn't override authenticated data that we need
