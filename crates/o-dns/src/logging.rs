@@ -33,7 +33,7 @@ pub fn setup_logging() -> anyhow::Result<()> {
                 ),
         )
         .with(
-            tracing_subscriber::fmt::layer()
+            layer()
                 .pretty()
                 .with_writer(log_file)
                 .with_ansi(false)

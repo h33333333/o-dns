@@ -22,8 +22,10 @@ pub struct Resolver {
 }
 
 impl Resolver {
-    pub fn new(state: Arc<State>) -> Self {
-        Resolver { state }
+    pub fn new(state: State) -> Self {
+        Resolver {
+            state: Arc::new(state),
+        }
     }
 
     pub async fn resolve_query(
@@ -72,11 +74,7 @@ impl Resolver {
                 .cache_lookup(question, &mut response_packet, dnssec)
                 .await
             {
-                tracing::debug!(
-                    qname = ?question.qname,
-                    qtype = ?question.query_type,
-                    "Cache hit"
-                );
+                // Cache hit
                 break 'resolve true;
             }
 
