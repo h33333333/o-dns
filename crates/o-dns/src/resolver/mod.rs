@@ -22,8 +22,10 @@ pub struct Resolver {
 }
 
 impl Resolver {
-    pub fn new(state: Arc<State>) -> Self {
-        Resolver { state }
+    pub fn new(state: State) -> Self {
+        Resolver {
+            state: Arc::new(state),
+        }
     }
 
     pub async fn resolve_query(

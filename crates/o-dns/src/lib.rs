@@ -3,15 +3,19 @@ pub use logging::setup_logging;
 mod hosts;
 pub use hosts::{Denylist, Hosts};
 mod cache;
-use cache::Cache;
 mod connection;
 pub use connection::Connection;
 mod resolver;
 pub use resolver::Resolver;
-pub mod util;
+mod server;
+pub use server::DnsServer;
+mod util;
 
-use std::net::SocketAddr;
+use anyhow::Context as _;
+use cache::Cache;
+use std::{net::SocketAddr, path::Path};
 use tokio::sync::RwLock;
+use util::{parse_denylist_file, parse_hosts_file};
 
 /// Recommended eDNS buf size
 pub const DEFAULT_EDNS_BUF_CAPACITY: usize = 1232;
@@ -28,12 +32,32 @@ pub struct State {
 }
 
 impl State {
-    pub fn new() -> Self {
-        State {
-            upstream_resolver: "1.1.1.1:53".parse().expect("shouldn't have failed"),
-            denylist: Default::default(),
-            hosts: Default::default(),
-            cache: Default::default(),
+    pub async fn new(
+        denylist_path: Option<&Path>,
+        allowlist_path: Option<&Path>,
+    ) -> anyhow::Result<Self> {
+        let mut denylist = Default::default();
+        let mut allowlist = Default::default();
+
+        // Populate the denylist
+        if let Some(path) = denylist_path {
+            parse_denylist_file(path, &mut denylist)
+                .await
+                .context("error while parsing the denylist file")?;
         }
+
+        // Populate the hosts file
+        if let Some(path) = allowlist_path {
+            parse_hosts_file(path, &mut allowlist)
+                .await
+                .context("error while parsing the hosts file")?;
+        }
+
+        Ok(State {
+            upstream_resolver: "1.1.1.1:53".parse().expect("shouldn't have failed"),
+            denylist: RwLock::new(denylist),
+            hosts: RwLock::new(allowlist),
+            cache: Default::default(),
+        })
     }
 }
