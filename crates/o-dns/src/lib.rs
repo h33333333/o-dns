@@ -9,6 +9,8 @@ mod resolver;
 pub use resolver::Resolver;
 mod server;
 pub use server::DnsServer;
+mod cli;
+pub use cli::Args;
 mod util;
 
 use anyhow::Context as _;
@@ -35,6 +37,7 @@ impl State {
     pub async fn new(
         denylist_path: Option<&Path>,
         allowlist_path: Option<&Path>,
+        upstream_resolver: SocketAddr,
     ) -> anyhow::Result<Self> {
         let mut denylist = Default::default();
         let mut allowlist = Default::default();
@@ -54,7 +57,7 @@ impl State {
         }
 
         Ok(State {
-            upstream_resolver: "1.1.1.1:53".parse().expect("shouldn't have failed"),
+            upstream_resolver,
             denylist: RwLock::new(denylist),
             hosts: RwLock::new(allowlist),
             cache: Default::default(),
