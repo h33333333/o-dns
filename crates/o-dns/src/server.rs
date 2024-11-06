@@ -1,8 +1,8 @@
-use crate::{Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
+use crate::{Args, Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 use anyhow::Context as _;
 use o_dns_lib::FromBuf as _;
 use o_dns_lib::{ByteBuf, DnsPacket};
-use std::path::Path;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::task::JoinSet;
@@ -18,21 +18,26 @@ pub struct DnsServer {
 }
 
 impl DnsServer {
-    pub async fn new() -> anyhow::Result<Self> {
+    pub async fn new(args: &Args) -> anyhow::Result<Self> {
+        let bind_addr = SocketAddr::new(args.host, args.port);
+
         let udp_socket = Arc::new(
-            UdpSocket::bind("0.0.0.0:53")
+            UdpSocket::bind(bind_addr)
                 .await
                 .context("error while creating a UDP socket")?,
         );
+
         let tcp_listener = Arc::new(
-            TcpListener::bind("0.0.0.0:53")
+            TcpListener::bind(bind_addr)
                 .await
                 .context("error while creating a TcpListener")?,
         );
 
+        let resolver_addr = SocketAddr::new(args.upstream_resolver, args.upstream_port);
         let state = State::new(
-            Some(Path::new("denylist_sample")),
-            Some(Path::new("hosts_sample")),
+            args.denylist_path.as_deref(),
+            args.allowlist_path.as_deref(),
+            resolver_addr,
         )
         .await
         .context("failed to instantiate a shared state")?;
@@ -47,7 +52,14 @@ impl DnsServer {
         })
     }
 
-    pub async fn add_workers(&mut self, n: usize) {
+    pub async fn new_with_workers(args: &Args) -> anyhow::Result<Self> {
+        let mut server = DnsServer::new(args).await?;
+        server.add_workers(args.max_parallel_connections).await;
+
+        Ok(server)
+    }
+
+    pub async fn add_workers(&mut self, n: u8) {
         for idx in 0..n {
             let udp_socket = self.udp_socket.clone();
             let tcp_listener = self.tcp_listener.clone();
