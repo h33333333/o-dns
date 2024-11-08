@@ -8,7 +8,7 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let mut server = DnsServer::new_with_workers(&args)
+    let server = DnsServer::new_with_workers(&args)
         .await
         .context("failed to instantiate the DNS server")?;
 

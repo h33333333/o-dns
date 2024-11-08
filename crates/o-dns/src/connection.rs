@@ -1,4 +1,7 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 
 use anyhow::Context as _;
 use o_dns_lib::ByteBuf;
@@ -23,6 +26,7 @@ pub trait AsyncUdpSocket {
         target: A,
     ) -> impl std::future::Future<Output = std::io::Result<usize>>;
     fn recv(&self, buf: &mut [u8]) -> impl std::future::Future<Output = std::io::Result<usize>>;
+    fn peer_addr(&self) -> anyhow::Result<IpAddr>;
 }
 
 impl AsyncUdpSocket for UdpSocket {
@@ -37,6 +41,12 @@ impl AsyncUdpSocket for UdpSocket {
     async fn recv(&self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.recv(buf).await
     }
+
+    fn peer_addr(&self) -> anyhow::Result<IpAddr> {
+        self.peer_addr()
+            .map(|socket_addr| socket_addr.ip())
+            .context("error while getting peer's addr")
+    }
 }
 
 impl AsyncUdpSocket for Arc<UdpSocket> {
@@ -50,6 +60,13 @@ impl AsyncUdpSocket for Arc<UdpSocket> {
 
     async fn recv(&self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.as_ref().recv(buf).await
+    }
+
+    fn peer_addr(&self) -> anyhow::Result<IpAddr> {
+        self.as_ref()
+            .peer_addr()
+            .map(|socket_addr| socket_addr.ip())
+            .context("error while getting peer's addr")
     }
 }
 
@@ -113,6 +130,19 @@ impl<U: AsyncUdpSocket> Connection<U> {
         };
 
         Ok(packet_length)
+    }
+
+    pub fn get_client_addr(&self) -> anyhow::Result<IpAddr> {
+        match self {
+            Connection::Tcp(socket) => socket
+                .peer_addr()
+                .map(|socket_addr| socket_addr.ip())
+                .context("bug: TCP socket is not connected?"),
+            Connection::Udp((socket, addr)) => addr
+                .map(|socket_addr| socket_addr.ip())
+                .or_else(|| socket.peer_addr().ok())
+                .context("bug: UDP socket is not connected and explicit addr is missing?"),
+        }
     }
 
     pub fn is_tcp(&self) -> bool {
