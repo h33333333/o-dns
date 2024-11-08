@@ -1,3 +1,4 @@
+use crate::query_log::QueryLogger;
 use crate::{Args, Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 use anyhow::Context as _;
 use o_dns_lib::FromBuf as _;
@@ -5,7 +6,8 @@ use o_dns_lib::{ByteBuf, DnsPacket};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::task::JoinSet;
+use tokio::sync::mpsc::unbounded_channel;
+use tokio::task::{JoinSet, LocalSet};
 use tracing::Instrument;
 
 type HandlerResult = anyhow::Result<()>;
@@ -15,6 +17,7 @@ pub struct DnsServer {
     tcp_listener: Arc<TcpListener>,
     resolver: Arc<Resolver>,
     workers: JoinSet<HandlerResult>,
+    query_logger: QueryLogger,
 }
 
 impl DnsServer {
@@ -42,13 +45,19 @@ impl DnsServer {
         .await
         .context("failed to instantiate a shared state")?;
 
-        let resolver = Arc::new(Resolver::new(state));
+        // Channel for query logs
+        let (log_tx, log_rx) = unbounded_channel();
+
+        let resolver = Arc::new(Resolver::new(state, log_tx));
+        let query_logger = QueryLogger::new(log_rx, &args.query_log_path)
+            .context("error while creating a query logger")?;
 
         Ok(DnsServer {
             udp_socket,
             tcp_listener,
             resolver,
             workers: JoinSet::new(),
+            query_logger,
         })
     }
 
@@ -72,15 +81,29 @@ impl DnsServer {
         }
     }
 
-    pub async fn block_until_completion(&mut self) -> anyhow::Result<()> {
+    pub async fn block_until_completion(mut self) -> anyhow::Result<()> {
+        let mut set = LocalSet::new();
+        set.spawn_local(async move {
+            if let Err(e) = self.query_logger.watch_for_logs().await {
+                tracing::debug!("Error in query logger: {}", e);
+            }
+        });
+
         loop {
-            if let Some(result) = self.workers.join_next().await {
-                if let Err(e) = result.context("worker task failed to execute")? {
-                    tracing::debug!("Error in a worker: {}", e);
+            tokio::select! {
+                result = self.workers.join_next() => {
+                    if let Some(result) = result {
+                        if let Err(e) = result.context("worker task failed to execute")? {
+                            tracing::debug!("Error in a worker: {}", e);
+                        }
+                    } else {
+                        // No workers left
+                        break;
+                    }
                 }
-            } else {
-                // No workers left
-                break;
+                _ = &mut set => {
+                    tracing::trace!("Query logger was shut down");
+                }
             }
         }
 

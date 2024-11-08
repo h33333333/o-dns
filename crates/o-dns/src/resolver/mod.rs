@@ -9,22 +9,33 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
     sync::Arc,
 };
-use tokio::net::UdpSocket;
+use tokio::{net::UdpSocket, sync::mpsc::UnboundedSender, time::Instant};
 use upstream::resolve_with_upstream;
 
 use crate::{
-    util::get_response_dns_packet, Connection, State, DEFAULT_EDNS_BUF_CAPACITY,
-    MAX_STANDARD_DNS_MSG_SIZE,
+    query_log::LogEntry, util::get_response_dns_packet, Connection, State,
+    DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE,
 };
+
+#[derive(Debug, Clone, Copy)]
+pub enum ResponseSource {
+    Denylist,
+    Allowlist,
+    Cache,
+    NoRecurse,
+    Upstream,
+}
 
 pub struct Resolver {
     state: Arc<State>,
+    log_tx: UnboundedSender<LogEntry>,
 }
 
 impl Resolver {
-    pub fn new(state: State) -> Self {
+    pub fn new(state: State, log_tx: UnboundedSender<LogEntry>) -> Self {
         Resolver {
             state: Arc::new(state),
+            log_tx,
         }
     }
 
@@ -33,6 +44,8 @@ impl Resolver {
         mut connection: Connection<Arc<UdpSocket>>,
         parsed_packet: anyhow::Result<DnsPacket<'static>>,
     ) -> anyhow::Result<()> {
+        let start = Instant::now();
+
         let requestor_edns_buf_size = parsed_packet.as_ref().ok().and_then(|packet| {
             packet.edns.and_then(|idx| {
                 packet
@@ -46,15 +59,15 @@ impl Resolver {
         // Create an empty response packet and copy the relevant settings from the query
         let mut response_packet = get_response_dns_packet(parsed_packet.as_ref().ok(), None);
 
-        let from_cache: bool = 'resolve: {
+        let (cache_response, source) = 'resolve: {
             let Ok(query_packet) = parsed_packet.as_ref() else {
                 response_packet.header.response_code = ResponseCode::FormatError;
-                break 'resolve false;
+                break 'resolve (false, None);
             };
 
             if query_packet.header.question_count > 1 || query_packet.questions.len() > 1 {
                 response_packet.header.response_code = ResponseCode::FormatError;
-                break 'resolve false;
+                break 'resolve (false, None);
             }
             let question = &query_packet.questions[0];
 
@@ -69,15 +82,6 @@ impl Resolver {
                 false
             };
 
-            // Check if query is cached
-            if self
-                .cache_lookup(question, &mut response_packet, dnssec)
-                .await
-            {
-                // Cache hit
-                break 'resolve true;
-            }
-
             // Check if requested host is in denylist
             if self.denylist_lookup(question, &mut response_packet).await {
                 tracing::debug!(
@@ -85,7 +89,7 @@ impl Resolver {
                     qtype = ?question.query_type,
                     "Found entry in denylist"
                 );
-                break 'resolve false;
+                break 'resolve (false, Some(ResponseSource::Denylist));
             }
 
             // Check if requested host is in allow/hosts list
@@ -95,13 +99,22 @@ impl Resolver {
                     qtype = ?question.query_type,
                     "Found entry in allowlist"
                 );
-                break 'resolve false;
+                break 'resolve (false, Some(ResponseSource::Allowlist));
             }
 
             // Return if requestor doesn't want recursive resolution
             if !query_packet.header.recursion_desired {
                 // TODO: include root/TLD NS in authority section in this case
-                break 'resolve false;
+                break 'resolve (false, Some(ResponseSource::NoRecurse));
+            }
+
+            // Check if query is cached
+            if self
+                .cache_lookup(question, &mut response_packet, dnssec)
+                .await
+            {
+                // Cache hit
+                break 'resolve (false, Some(ResponseSource::Cache));
             }
 
             // Try to resolve with the configured upstream resolver
@@ -117,7 +130,7 @@ impl Resolver {
                 tracing::debug!(resolver = ?self.state.upstream_resolver, "Upstream resolution failed: {:#}", e);
             }
 
-            false
+            (true, Some(ResponseSource::Upstream))
         };
 
         // Add original questions to the response if possible and wasn't done before
@@ -139,8 +152,7 @@ impl Resolver {
             )
             .context("error while encoding the response")?;
 
-        if !from_cache {
-            // Cache the response only if it didn't come from the cache already
+        if cache_response {
             let mut cache = self.state.cache.write().await;
             cache
                 .cache_response(&response_packet)
@@ -151,6 +163,22 @@ impl Resolver {
             // Do not propagate the error, as it's per-user and thus recoverable
             tracing::error!("Error while sending a DNS response: {:#}", e)
         };
+
+        let log_entry = match LogEntry::new_from_response(
+            &response_packet,
+            connection.get_client_addr().ok(),
+            start.elapsed().as_millis() as u32,
+            source,
+        ) {
+            Ok(log_entry) => log_entry,
+            Err(e) => {
+                tracing::debug!("Failed to create a log entry: {}", e);
+                return Ok(());
+            }
+        };
+
+        // We don't care if the receiving end was dropped already, as we can't do nothing about it
+        let _ = self.log_tx.send(log_entry);
 
         Ok(())
     }

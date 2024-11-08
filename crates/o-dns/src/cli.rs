@@ -19,4 +19,6 @@ pub struct Args {
     pub upstream_resolver: IpAddr,
     #[arg(long, value_name = "PORT", default_value_t = 53)]
     pub upstream_port: u16,
+    #[arg(long, value_name = "PATH", default_value = "query_log.db")]
+    pub query_log_path: PathBuf,
 }

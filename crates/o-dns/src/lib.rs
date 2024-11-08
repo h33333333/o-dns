@@ -11,6 +11,7 @@ mod server;
 pub use server::DnsServer;
 mod cli;
 pub use cli::Args;
+mod query_log;
 mod util;
 
 use anyhow::Context as _;
