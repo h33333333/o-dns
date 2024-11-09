@@ -1,16 +1,16 @@
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use o_dns_lib::{ByteBuf, DnsPacket, FromBuf as _};
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::mpsc::unbounded_channel;
-use tokio::task::{JoinSet, LocalSet};
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinSet;
 use tracing::Instrument;
 
-use crate::db::get_sqlite_connection_pool;
-use crate::query_log::QueryLogger;
-use crate::{Args, Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
+use crate::query_logger::LogEntry;
+use crate::{Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 
 type HandlerResult = anyhow::Result<()>;
 
@@ -19,58 +19,52 @@ pub struct DnsServer {
     tcp_listener: Arc<TcpListener>,
     resolver: Arc<Resolver>,
     workers: JoinSet<HandlerResult>,
-    query_logger: QueryLogger,
 }
 
 impl DnsServer {
-    pub async fn new(args: &Args) -> anyhow::Result<Self> {
-        let bind_addr = SocketAddr::new(args.host, args.port);
-
+    pub async fn new(
+        listen_on: SocketAddr,
+        resolver_addr: SocketAddr,
+        denylist_path: Option<&Path>,
+        allowlist_path: Option<&Path>,
+        log_tx: UnboundedSender<LogEntry>,
+    ) -> anyhow::Result<Self> {
         let udp_socket = Arc::new(
-            UdpSocket::bind(bind_addr)
+            UdpSocket::bind(listen_on)
                 .await
                 .context("error while creating a UDP socket")?,
         );
 
         let tcp_listener = Arc::new(
-            TcpListener::bind(bind_addr)
+            TcpListener::bind(listen_on)
                 .await
                 .context("error while creating a TcpListener")?,
         );
 
-        let resolver_addr = SocketAddr::new(args.upstream_resolver, args.upstream_port);
-        let state = State::new(
-            args.denylist_path.as_deref(),
-            args.allowlist_path.as_deref(),
-            resolver_addr,
-        )
-        .await
-        .context("failed to instantiate a shared state")?;
-
-        let connection_pool = get_sqlite_connection_pool(&args.query_log_path)
+        let state = State::new(denylist_path, allowlist_path, resolver_addr)
             .await
-            .context("failed to create an SQLite connection pool")?;
-
-        // Channel for query logs
-        let (log_tx, log_rx) = unbounded_channel();
+            .context("failed to instantiate a shared state")?;
 
         let resolver = Arc::new(Resolver::new(state, log_tx));
-        let query_logger = QueryLogger::new(log_rx, connection_pool.clone())
-            .await
-            .context("error while creating a query logger")?;
 
         Ok(DnsServer {
             udp_socket,
             tcp_listener,
             resolver,
             workers: JoinSet::new(),
-            query_logger,
         })
     }
 
-    pub async fn new_with_workers(args: &Args) -> anyhow::Result<Self> {
-        let mut server = DnsServer::new(args).await?;
-        server.add_workers(args.max_parallel_connections).await;
+    pub async fn new_with_workers(
+        listen_on: SocketAddr,
+        resolver_addr: SocketAddr,
+        denylist_path: Option<&Path>,
+        allowlist_path: Option<&Path>,
+        log_tx: UnboundedSender<LogEntry>,
+        max_parallel_connections: u8,
+    ) -> anyhow::Result<Self> {
+        let mut server = DnsServer::new(listen_on, resolver_addr, denylist_path, allowlist_path, log_tx).await?;
+        server.add_workers(max_parallel_connections).await;
 
         Ok(server)
     }
@@ -89,28 +83,9 @@ impl DnsServer {
     }
 
     pub async fn block_until_completion(mut self) -> anyhow::Result<()> {
-        let mut set = LocalSet::new();
-        set.spawn_local(async move {
-            if let Err(e) = self.query_logger.watch_for_logs().await {
-                tracing::debug!("Error in query logger: {}", e);
-            }
-        });
-
-        loop {
-            tokio::select! {
-                result = self.workers.join_next() => {
-                    if let Some(result) = result {
-                        if let Err(e) = result.context("worker task failed to execute")? {
-                            tracing::debug!("Error in a worker: {}", e);
-                        }
-                    } else {
-                        // No workers left
-                        break;
-                    }
-                }
-                _ = &mut set => {
-                    tracing::trace!("Query logger was shut down");
-                }
+        while let Some(result) = self.workers.join_next().await {
+            if let Err(e) = result.context("worker task failed to execute")? {
+                tracing::debug!("Error in a worker: {}", e);
             }
         }
 

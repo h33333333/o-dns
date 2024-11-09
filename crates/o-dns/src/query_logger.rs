@@ -2,7 +2,9 @@ use std::net::IpAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use o_dns_lib::{DnsPacket, ResponseCode};
+use o_dns_lib::DnsPacket;
+use serde::Serialize;
+use sqlx::prelude::FromRow;
 use sqlx::{SqliteConnection, SqlitePool};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{interval, Instant};
@@ -11,16 +13,16 @@ use crate::resolver::ResponseSource;
 
 const DEFAULT_LOG_CHUNK: usize = 64;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, FromRow)]
 pub struct LogEntry {
     pub id: u32,
     pub timestamp: u32,
     pub domain: String,
     pub qtype: u16,
     pub client: Option<String>,
-    pub response_code: ResponseCode,
+    pub response_code: u8,
     pub response_delay_ms: u32,
-    pub source: Option<ResponseSource>,
+    pub source: Option<u8>,
 }
 
 impl LogEntry {
@@ -37,7 +39,7 @@ impl LogEntry {
 
         let question = response
             .questions
-            .get(0)
+            .first()
             .context("bug: missing question in the response packet")?;
 
         Ok(LogEntry {
@@ -46,9 +48,9 @@ impl LogEntry {
             domain: question.qname.clone().into_owned(),
             qtype: question.query_type.into(),
             client: client.map(|addr| addr.to_string()),
-            response_code: response.header.response_code,
+            response_code: response.header.response_code as u8,
             response_delay_ms,
-            source,
+            source: source.map(|src| src as u8),
         })
     }
 
@@ -57,7 +59,7 @@ impl LogEntry {
             "INSERT INTO query_log (timestamp, domain, qtype, client, response_code, response_delay_ms, source)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
-        .bind(&self.timestamp)
+        .bind(self.timestamp)
         .bind(&self.domain)
         .bind(self.qtype)
         .bind(&self.client)
@@ -93,8 +95,8 @@ impl QueryLogger {
     }
 
     pub async fn watch_for_logs(mut self) -> anyhow::Result<()> {
-        // Try to write every 500 ms if there are enough logs in the queue
-        let mut db_write_interval = interval(Duration::from_millis(500));
+        // Try to write every 5 seconds if there are any logs in the queue
+        let mut db_write_interval = interval(Duration::from_secs(5));
 
         let mut logs = Vec::with_capacity(DEFAULT_LOG_CHUNK);
         loop {
@@ -109,7 +111,10 @@ impl QueryLogger {
                         continue;
                     }
                 }
-                _ = db_write_interval.tick(), if logs.len() >= 10 => {
+                _ = db_write_interval.tick() => {
+                    if logs.is_empty() {
+                        continue;
+                    }
                     // It's time to write the collected logs to SQLite
                     false
                 }

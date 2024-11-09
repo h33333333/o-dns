@@ -11,8 +11,11 @@ mod server;
 pub use server::DnsServer;
 mod cli;
 pub use cli::Args;
+mod api;
+mod app;
+pub use app::App;
 mod db;
-mod query_log;
+mod query_logger;
 mod util;
 
 use std::net::SocketAddr;

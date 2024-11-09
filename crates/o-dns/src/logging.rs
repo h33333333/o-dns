@@ -8,8 +8,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
-pub const LOGGING_ENV: &'static str = "ODNS_LOG";
-pub const LOGGING_FILE_ENV: &'static str = "ODNS_LOG_FILE";
+pub const LOGGING_ENV: &str = "ODNS_LOG";
+pub const LOGGING_FILE_ENV: &str = "ODNS_LOG_FILE";
 
 pub fn setup_logging() -> anyhow::Result<()> {
     let log_file = File::options()
@@ -31,8 +31,8 @@ pub fn setup_logging() -> anyhow::Result<()> {
                 .with_filter(
                     EnvFilter::builder()
                         .with_env_var(LOGGING_ENV)
-                        .with_default_directive(LevelFilter::INFO.into())
-                        .from_env_lossy(),
+                        .try_from_env()
+                        .unwrap_or_else(|_| format!("{}=info", env!("CARGO_CRATE_NAME")).into()),
                 ),
         )
         .with(
