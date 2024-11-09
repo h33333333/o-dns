@@ -567,7 +567,7 @@ mod tests {
         assert_eq!(parsed_packet.header.question_count, 1);
         assert_eq!(parsed_packet.questions, dns_packet.questions);
         assert_eq!(parsed_packet.header.answer_rr_count, 1);
-        assert_eq!(parsed_packet.answers.get(0), dns_packet.answers.get(0));
+        assert_eq!(parsed_packet.answers.first(), dns_packet.answers.first());
     }
 
     #[cfg(feature = "edns")]

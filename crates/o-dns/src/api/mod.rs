@@ -13,6 +13,7 @@ use tokio::net::TcpListener;
 pub struct ApiServer {
     router: Router,
 }
+
 impl ApiServer {
     pub fn new(connection_pool: SqlitePool) -> Self {
         let state = ApiState { connection_pool };
