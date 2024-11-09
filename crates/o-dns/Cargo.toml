@@ -22,4 +22,4 @@ sha1 = "0.10.6"
 regex = "1.11.1"
 bitflags = "2.6.0"
 clap = { version = "4.5.20", features = ["derive"] }
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+sqlx = { version = "0.8.2", features = ["runtime-tokio", "sqlite", "derive"] }

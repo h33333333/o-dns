@@ -1,3 +1,4 @@
+use crate::db::get_sqlite_connection_pool;
 use crate::query_log::QueryLogger;
 use crate::{Args, Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 use anyhow::Context as _;
@@ -45,11 +46,16 @@ impl DnsServer {
         .await
         .context("failed to instantiate a shared state")?;
 
+        let connection_pool = get_sqlite_connection_pool(&args.query_log_path)
+            .await
+            .context("failed to create an SQLite connection pool")?;
+
         // Channel for query logs
         let (log_tx, log_rx) = unbounded_channel();
 
         let resolver = Arc::new(Resolver::new(state, log_tx));
-        let query_logger = QueryLogger::new(log_rx, &args.query_log_path)
+        let query_logger = QueryLogger::new(log_rx, connection_pool.clone())
+            .await
             .context("error while creating a query logger")?;
 
         Ok(DnsServer {

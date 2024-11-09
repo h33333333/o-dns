@@ -1,17 +1,16 @@
 use std::{
     net::IpAddr,
-    path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Context;
 use o_dns_lib::{DnsPacket, ResponseCode};
-use rusqlite::Connection;
 use tokio::{
     sync::mpsc::UnboundedReceiver,
-    task::yield_now,
     time::{interval, Instant},
 };
+
+use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::resolver::ResponseSource;
 
@@ -58,25 +57,26 @@ impl LogEntry {
         })
     }
 
-    fn insert_into(&self, connection: &Connection) -> anyhow::Result<()> {
-        let inserted_rows = connection.execute(
+    async fn insert_into(&self, connection: &mut SqliteConnection) -> anyhow::Result<()> {
+        let query_result = sqlx::query(
             "INSERT INTO query_log (timestamp, domain, qtype, client, response_code, response_delay_ms, source)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            (
-                &self.timestamp,
-                &self.domain,
-                &self.qtype,
-                &self.client,
-                self.response_code as u8,
-                &self.response_delay_ms,
-                self.source.as_ref().map(|src| *src as u8)
-            )
-        ).context("error while inserting a log entry")?;
+        )
+        .bind(&self.timestamp)
+        .bind(&self.domain)
+        .bind(self.qtype)
+        .bind(&self.client)
+        .bind(self.response_code as u8)
+        .bind(self.response_delay_ms)
+        .bind(self.source.as_ref().map(|src| *src as u8))
+        .execute(connection)
+        .await
+        .context("error while inserting a log entry")?;
 
-        if inserted_rows != 1 {
+        if query_result.rows_affected() != 1 {
             anyhow::bail!(
                 "error while inserting a log entry: wrong number of inserted rows {}",
-                inserted_rows
+                query_result.rows_affected()
             )
         }
 
@@ -85,38 +85,16 @@ impl LogEntry {
 }
 
 pub struct QueryLogger {
-    connection: Connection,
+    connection_pool: SqlitePool,
     log_rx: UnboundedReceiver<LogEntry>,
 }
 
 impl QueryLogger {
-    pub fn new(log_rx: UnboundedReceiver<LogEntry>, path: &Path) -> anyhow::Result<Self> {
-        let path = path.with_file_name("query_log.db");
-
-        // Ensure that all directories exist
-        std::fs::create_dir_all(path.parent().unwrap_or(Path::new("/")))
-            .context("error while creating parent directories for the query log DB")?;
-
-        let connection =
-            Connection::open(path).context("error while opening a connection to SQLite DB")?;
-
-        connection
-            .execute(
-                "CREATE TABLE IF NOT EXISTS query_log (
-                    id INTEGER PRIMARY KEY,
-                    timestamp INTEGER NOT NULL,
-                    domain TEXT NOT NULL,
-                    qtype INTEGER NOT NULL,
-                    client TEXT,
-                    response_code INTEGER NOT NULL,
-                    response_delay_ms INTEGER NOT NULL,
-                    source INTEGER
-                )",
-                (),
-            )
-            .context("error while creating a table")?;
-
-        Ok(QueryLogger { connection, log_rx })
+    pub async fn new(log_rx: UnboundedReceiver<LogEntry>, connection_pool: SqlitePool) -> anyhow::Result<Self> {
+        Ok(QueryLogger {
+            connection_pool,
+            log_rx,
+        })
     }
 
     pub async fn watch_for_logs(mut self) -> anyhow::Result<()> {
@@ -136,28 +114,27 @@ impl QueryLogger {
                         continue;
                     }
                 }
-                _ = db_write_interval.tick(), if logs.len() >= DEFAULT_LOG_CHUNK => {
+                _ = db_write_interval.tick(), if logs.len() >= 10 => {
                     // It's time to write the collected logs to SQLite
                     false
                 }
             };
 
             let start = Instant::now();
-            let tx = self
-                .connection
-                .transaction()
+            let mut tx = self
+                .connection_pool
+                .begin()
+                .await
                 .context("error while creating a transaction")?;
 
-            yield_now().await;
-
             for log in logs.iter() {
-                log.insert_into(&tx)
+                log.insert_into(&mut tx)
+                    .await
                     .context("error while adding a log to the txn")?;
-
-                yield_now().await;
             }
 
             tx.commit()
+                .await
                 .context("error while inserting collected logs into the DB")?;
 
             tracing::trace!(
