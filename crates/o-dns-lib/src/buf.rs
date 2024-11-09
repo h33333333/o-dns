@@ -1,10 +1,8 @@
 use core::str;
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    io::Write,
-    ops::{Deref, DerefMut},
-};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::io::Write;
+use std::ops::{Deref, DerefMut};
 
 use anyhow::Context;
 
@@ -115,19 +113,13 @@ impl<'a> ByteBuf<'a> {
 
     pub fn read_u16(&mut self) -> anyhow::Result<u16> {
         self.read_bytes(2)
-            .and_then(|bytes| {
-                TryInto::<[u8; 2]>::try_into(bytes)
-                    .context("bug: should be exactly two bytes in length")
-            })
+            .and_then(|bytes| TryInto::<[u8; 2]>::try_into(bytes).context("bug: should be exactly two bytes in length"))
             .map(u16::from_be_bytes)
     }
 
     pub fn peek_u16(&self, pos: usize) -> anyhow::Result<u16> {
         self.peek_bytes(pos, 2)
-            .and_then(|bytes| {
-                TryInto::<[u8; 2]>::try_into(bytes)
-                    .context("bug: should be exactly two bytes in length")
-            })
+            .and_then(|bytes| TryInto::<[u8; 2]>::try_into(bytes).context("bug: should be exactly two bytes in length"))
             .map(u16::from_be_bytes)
     }
 
@@ -223,18 +215,14 @@ impl<'a> ByteBuf<'a> {
                 pos += 1;
 
                 if label_length != 0 {
-                    let label = self
-                        .buf
-                        .get(pos..pos + label_length as usize)
-                        .with_context(|| {
-                            format!(
-                                "malformed packet: expected label of length {} at byte {}",
-                                label_length, pos
-                            )
-                        })?;
-                    let label = str::from_utf8(label).with_context(|| {
-                        format!("malformed packet: QNAME label at byte {} is not UTF-8", pos)
+                    let label = self.buf.get(pos..pos + label_length as usize).with_context(|| {
+                        format!(
+                            "malformed packet: expected label of length {} at byte {}",
+                            label_length, pos
+                        )
                     })?;
+                    let label = str::from_utf8(label)
+                        .with_context(|| format!("malformed packet: QNAME label at byte {} is not UTF-8", pos))?;
                     labels.push(label);
 
                     pos += label_length as usize;
@@ -278,9 +266,7 @@ impl<'a> ByteBuf<'a> {
             if !label.is_empty() {
                 let remaining_qname = qname.splitn(idx + 1, '.').last().unwrap();
 
-                let cached_position = label_cache
-                    .as_ref()
-                    .and_then(|cache| cache.get(remaining_qname));
+                let cached_position = label_cache.as_ref().and_then(|cache| cache.get(remaining_qname));
 
                 if let Some(offset) = cached_position {
                     let jump_ptr = 0xc000 | (*offset as u16);
@@ -288,12 +274,8 @@ impl<'a> ByteBuf<'a> {
                     used_cache = true;
                 } else {
                     self.write_u8(label.len() as u8);
-                    self.write_bytes(label.as_bytes(), None).with_context(|| {
-                        format!(
-                            "error while writing label '{}' to the underlying buffer",
-                            label
-                        )
-                    })?;
+                    self.write_bytes(label.as_bytes(), None)
+                        .with_context(|| format!("error while writing label '{}' to the underlying buffer", label))?;
                 }
 
                 if used_cache {
@@ -345,9 +327,7 @@ mod tests {
 
     #[test]
     fn read_valid_qname() {
-        let qname = &[
-            0x6, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x3, 0x63, 0x6f, 0x6d, 0x0,
-        ];
+        let qname = &[0x6, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x3, 0x63, 0x6f, 0x6d, 0x0];
         let mut buf = ByteBuf::new(qname);
         let result = buf.read_qname().expect("shouldn't have failed");
         assert_eq!(result, "google.com");
@@ -401,18 +381,14 @@ mod tests {
         assert!(cache.get(domain).is_some_and(|pos| *pos == 0));
 
         // Should write 'api' and point to the rest of the qname using a jump ptr
-        buf.write_qname(qname, Some(&mut cache))
-            .expect("shouldn't have failed");
+        buf.write_qname(qname, Some(&mut cache)).expect("shouldn't have failed");
         // Should have cached a new label
         assert_eq!(cache.len(), 2);
         assert!(cache.get(qname).is_some_and(|pos| *pos == 12));
 
         assert_eq!(
             &*buf,
-            &[
-                0x6, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x3, 0x63, 0x6f, 0x6d, 0x0, 0x3, 0x61,
-                0x70, 0x69, 0xc0, 0x0
-            ]
+            &[0x6, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x3, 0x63, 0x6f, 0x6d, 0x0, 0x3, 0x61, 0x70, 0x69, 0xc0, 0x0]
         )
     }
 

@@ -1,10 +1,9 @@
-use std::{path::Path, time::Duration};
+use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Context as _;
-use sqlx::{
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    SqlitePool,
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::SqlitePool;
 
 pub async fn get_sqlite_connection_pool(path: &Path) -> anyhow::Result<SqlitePool> {
     let path = path.with_file_name("query_log.db");

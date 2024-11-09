@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 
-use crate::{buf::EncodedSize, ByteBuf, EncodeToBuf, FromBuf};
+use crate::buf::EncodedSize;
+use crate::{ByteBuf, EncodeToBuf, FromBuf};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -188,10 +189,8 @@ impl EncodeToBuf for DnsHeader {
         }
         buf.write_u16(self.id).context("writing ID")?;
         buf.write_u16(self.get_flags()).context("writing flags")?;
-        buf.write_u16(self.question_count)
-            .context("writing question count")?;
-        buf.write_u16(self.answer_rr_count)
-            .context("writing answer count")?;
+        buf.write_u16(self.question_count).context("writing question count")?;
+        buf.write_u16(self.answer_rr_count).context("writing answer count")?;
         buf.write_u16(self.authority_rr_count)
             .context("writing authority count")?;
         buf.write_u16(self.additional_rr_count)
@@ -210,14 +209,13 @@ impl EncodedSize for DnsHeader {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use proptest::prelude::*;
+
+    use super::*;
 
     #[test]
     fn dns_header_parsing() {
-        let stub_header = &mut [
-            0x0, 0xff, 0x95, 0xa4, 0x0, 0x6, 0x0, 0x7, 0x0, 0x8, 0x0, 0x9,
-        ];
+        let stub_header = &mut [0x0, 0xff, 0x95, 0xa4, 0x0, 0x6, 0x0, 0x7, 0x0, 0x8, 0x0, 0x9];
         let mut buf = ByteBuf::new(stub_header);
         let header = DnsHeader::from_buf(&mut buf).expect("shouldn't have failed");
 

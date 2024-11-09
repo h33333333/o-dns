@@ -1,16 +1,14 @@
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::net::{Ipv4Addr, Ipv6Addr};
 #[cfg(feature = "edns")]
 use std::num::NonZero;
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    net::{Ipv4Addr, Ipv6Addr},
-};
 
 use anyhow::Context;
 
-use crate::{
-    buf::EncodedSize, utils::get_max_encoded_qname_size, ByteBuf, EncodeToBuf, FromBuf, QueryType,
-};
+use crate::buf::EncodedSize;
+use crate::utils::get_max_encoded_qname_size;
+use crate::{ByteBuf, EncodeToBuf, FromBuf, QueryType};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ResourceRecord<'a> {
@@ -65,8 +63,7 @@ impl FromBuf for ResourceRecord<'_> {
             .read_u16()
             .and_then(|msb| buf.read_u16().map(|lsb| ((msb as u32) << 16) | lsb as u32))
             .context("TTL is missing")?;
-        let resource_data =
-            ResourceData::from_buf_with_type(buf, query_type).context("can't decode RDATA")?;
+        let resource_data = ResourceData::from_buf_with_type(buf, query_type).context("can't decode RDATA")?;
         Ok(ResourceRecord {
             name,
             ttl,
@@ -92,8 +89,7 @@ impl<'a> EncodeToBuf for ResourceRecord<'a> {
         buf.write_u16(self.resource_data.get_query_type().into())
             .context("writing TYPE")?;
         buf.write_u16(self.class).context("writing CLASS")?;
-        buf.write_bytes(&self.ttl.to_be_bytes(), None)
-            .context("writing TTL")?;
+        buf.write_bytes(&self.ttl.to_be_bytes(), None).context("writing TTL")?;
 
         self.resource_data
             .encode_to_buf_with_cache(buf, label_cache, max_size)
@@ -145,10 +141,7 @@ pub enum ResourceData<'a> {
 }
 
 impl<'a> ResourceData<'a> {
-    pub fn from_buf_with_type(
-        buf: &mut ByteBuf<'a>,
-        query_type: QueryType,
-    ) -> anyhow::Result<ResourceData<'static>> {
+    pub fn from_buf_with_type(buf: &mut ByteBuf<'a>, query_type: QueryType) -> anyhow::Result<ResourceData<'static>> {
         let rd_length = buf.read_u16().context("RDLENGTH is missing")?;
         Ok(match query_type {
             QueryType::UNKNOWN(query_type) => {
@@ -180,9 +173,7 @@ impl<'a> ResourceData<'a> {
                 if rd_length != 16 {
                     anyhow::bail!("AAAA record: unexpected RDLENGTH {}", rd_length);
                 }
-                let address_raw = buf
-                    .read_bytes(16)
-                    .context("AAAA record: ADDRESS is missing")?;
+                let address_raw = buf.read_bytes(16).context("AAAA record: ADDRESS is missing")?;
                 let address = Ipv6Addr::from(TryInto::<[u8; 16]>::try_into(address_raw).unwrap());
                 ResourceData::AAAA { address }
             }
@@ -197,16 +188,15 @@ impl<'a> ResourceData<'a> {
                             rd_length - remaining_rd_length
                         )
                     })?;
-                    let option_length = buf.read_u16().with_context(|| {
-                        format!("OPT record: option length is missing for option {}", option)
+                    let option_length = buf
+                        .read_u16()
+                        .with_context(|| format!("OPT record: option length is missing for option {}", option))?;
+                    let option_data = buf.read_bytes(option_length as usize).with_context(|| {
+                        format!(
+                            "OPT record: option data of length {} is missing for option {}",
+                            option_length, option
+                        )
                     })?;
-                    let option_data =
-                        buf.read_bytes(option_length as usize).with_context(|| {
-                            format!(
-                                "OPT record: option data of length {} is missing for option {}",
-                                option_length, option
-                            )
-                        })?;
                     options
                         .get_or_insert_with(|| Default::default())
                         .insert(option, option_data.to_vec().into());
@@ -246,8 +236,7 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
             ResourceData::UNKNOWN { rdata: data, .. } => {
                 buf.write_u16(data.len() as u16)
                     .context("UNKNOWN record: writing RDLENGTH")?;
-                buf.write_bytes(data, None)
-                    .context("UNKNOWN record: writing RDATA")?;
+                buf.write_bytes(data, None).context("UNKNOWN record: writing RDATA")?;
             }
             ResourceData::A { address } => {
                 buf.write_u16(4).context("A record: writing RDLENGTH")?;
@@ -258,8 +247,7 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
                 let rdata_pos = buf.len();
                 // We don't know how many bytes qname encoding will take in advance,
                 // so we can just write a stub value and replace it later
-                buf.write_u16(0)
-                    .context("NS record: writing stub RDLENGTH")?;
+                buf.write_u16(0).context("NS record: writing stub RDLENGTH")?;
                 let qname_length = buf
                     .write_qname(ns_domain_name, label_cache)
                     .context("NS record: writing NSDNAME")?;
@@ -271,8 +259,7 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
                 let rdata_pos = buf.len();
                 // We don't know how many bytes qname encoding will take in advance,
                 // so we can just write a stub value and replace it later
-                buf.write_u16(0)
-                    .context("CNAME record: writing stub RDLENGTH")?;
+                buf.write_u16(0).context("CNAME record: writing stub RDLENGTH")?;
                 let qname_length = buf
                     .write_qname(cname, label_cache)
                     .context("CNAME record: writing CNAME")?;
@@ -290,8 +277,7 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
                 let rdata_pos = buf.len();
                 // We don't know how many bytes options will take in advance,
                 // so we can just write a stub value and replace it later
-                buf.write_u16(0)
-                    .context("OPT record: writing stub RDLENGTH")?;
+                buf.write_u16(0).context("OPT record: writing stub RDLENGTH")?;
 
                 let mut rd_length = 0;
                 if let Some(options) = options {
@@ -299,10 +285,7 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
                         .iter()
                         .try_for_each(|(&option_code, option_data)| {
                             buf.write_u16(option_code).with_context(|| {
-                                format!(
-                                    "OPT record: error while writing option code {}",
-                                    option_code
-                                )
+                                format!("OPT record: error while writing option code {}", option_code)
                             })?;
                             buf.write_u16(option_data.len() as u16).with_context(|| {
                                 format!(
@@ -311,10 +294,7 @@ impl<'a> EncodeToBuf for ResourceData<'a> {
                                 )
                             })?;
                             buf.write_bytes(option_data, None).with_context(|| {
-                                format!(
-                                    "OPT record: error while writing option data for option {}",
-                                    option_code
-                                )
+                                format!("OPT record: error while writing option data for option {}", option_code)
                             })?;
                             rd_length += 4 + option_data.len();
 
@@ -367,10 +347,10 @@ impl EncodedSize for ResourceData<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_utils::{arb_resource_data, arb_resource_record};
+    use proptest::prelude::*;
 
     use super::*;
-    use proptest::prelude::*;
+    use crate::test_utils::{arb_resource_data, arb_resource_record};
 
     proptest! {
         #[test]

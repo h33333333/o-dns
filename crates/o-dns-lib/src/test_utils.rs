@@ -1,7 +1,5 @@
-use std::{
-    borrow::Cow,
-    net::{Ipv4Addr, Ipv6Addr},
-};
+use std::borrow::Cow;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use prop::strategy::Union;
 #[cfg(feature = "edns")]
@@ -37,9 +35,7 @@ pub fn arb_resource_data() -> impl Strategy<Value = ResourceData<'static>> {
             .prop_map(|address| ResourceData::A { address })
             .boxed(),
         arb_qname()
-            .prop_map(|qname| ResourceData::NS {
-                ns_domain_name: qname,
-            })
+            .prop_map(|qname| ResourceData::NS { ns_domain_name: qname })
             .boxed(),
         arb_qname()
             .prop_map(|qname| ResourceData::CNAME { cname: qname })

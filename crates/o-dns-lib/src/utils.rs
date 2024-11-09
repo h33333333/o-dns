@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 
-pub fn get_max_encoded_qname_size(
-    qname: &str,
-    label_cache: Option<&HashMap<&str, usize>>,
-) -> usize {
+pub fn get_max_encoded_qname_size(qname: &str, label_cache: Option<&HashMap<&str, usize>>) -> usize {
     let mut size = 0;
     for (idx, label) in qname.split(".").enumerate() {
         if !label.is_empty() {

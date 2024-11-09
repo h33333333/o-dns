@@ -1,14 +1,10 @@
-use std::{
-    net::{IpAddr, SocketAddr},
-    sync::Arc,
-};
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use o_dns_lib::ByteBuf;
-use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _},
-    net::{TcpStream, ToSocketAddrs, UdpSocket},
-};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::{TcpStream, ToSocketAddrs, UdpSocket};
 
 use crate::DEFAULT_EDNS_BUF_CAPACITY;
 
@@ -86,9 +82,10 @@ impl<U: AsyncUdpSocket> Connection<U> {
             }
             Connection::Udp((socket, addr)) => {
                 if let Some(addr) = addr {
-                    socket.send_to(src, &*addr).await.with_context(|| {
-                        format!("UDP: error while sending a DNS packet to {}", addr)
-                    })?;
+                    socket
+                        .send_to(src, &*addr)
+                        .await
+                        .with_context(|| format!("UDP: error while sending a DNS packet to {}", addr))?;
                 } else {
                     socket
                         .send(src)
@@ -107,8 +104,7 @@ impl<U: AsyncUdpSocket> Connection<U> {
                 let length = socket
                     .read_u16()
                     .await
-                    .context("TCP: error while reading packet's length")?
-                    as usize;
+                    .context("TCP: error while reading packet's length")? as usize;
                 if dst.len() < length {
                     dst.resize(length);
                 }
@@ -122,10 +118,7 @@ impl<U: AsyncUdpSocket> Connection<U> {
                 if dst.len() < DEFAULT_EDNS_BUF_CAPACITY {
                     dst.resize(DEFAULT_EDNS_BUF_CAPACITY);
                 }
-                socket
-                    .recv(dst)
-                    .await
-                    .context("UDP: error while reading a packet")?
+                socket.recv(dst).await.context("UDP: error while reading a packet")?
             }
         };
 

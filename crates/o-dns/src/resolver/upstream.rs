@@ -1,11 +1,12 @@
-use crate::{
-    connection::Connection, util::get_query_dns_packet, DEFAULT_EDNS_BUF_CAPACITY,
-    MAX_STANDARD_DNS_MSG_SIZE,
-};
+use std::net::SocketAddr;
+
 use anyhow::Context as _;
 use o_dns_lib::{ByteBuf, DnsPacket, EncodeToBuf as _, FromBuf as _, Question};
-use std::net::SocketAddr;
 use tokio::net::{TcpStream, UdpSocket};
+
+use crate::connection::Connection;
+use crate::util::get_query_dns_packet;
+use crate::{DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE};
 
 pub(super) async fn resolve_with_upstream(
     question: &Question<'_>,
@@ -55,8 +56,7 @@ pub(super) async fn resolve_with_upstream(
             .await
             .context("error while reading the response")?;
 
-        let response =
-            DnsPacket::from_buf(&mut buf).context("error while decoding the response")?;
+        let response = DnsPacket::from_buf(&mut buf).context("error while decoding the response")?;
 
         if response.header.truncation {
             if connection.is_tcp() {
