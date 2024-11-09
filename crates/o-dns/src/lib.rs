@@ -11,6 +11,7 @@ mod server;
 pub use server::DnsServer;
 mod cli;
 pub use cli::Args;
+mod db;
 mod query_log;
 mod util;
 
