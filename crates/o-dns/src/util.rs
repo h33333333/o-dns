@@ -217,11 +217,7 @@ fn parse_regex(mut line: &mut str) -> anyhow::Result<(&mut str, &mut str)> {
             if byte == b'/' && !*escaped_symbol {
                 return None;
             }
-            if byte == b'\\' && !*escaped_symbol {
-                *escaped_symbol = true;
-            } else {
-                *escaped_symbol = false;
-            }
+            *escaped_symbol = byte == b'\\' && !*escaped_symbol;
             Some(())
         })
         .count();
@@ -240,8 +236,8 @@ fn parse_regex(mut line: &mut str) -> anyhow::Result<(&mut str, &mut str)> {
 fn parse_domain_name(line: &mut str) -> Option<(&mut str, &mut str)> {
     let mut domain_length = 0;
     let mut is_wildcard_label = false;
-    for (idx, byte) in unsafe { line.as_bytes_mut().into_iter().enumerate() } {
-        if is_wildcard_label && !(*byte == b'.') {
+    for (idx, byte) in unsafe { line.as_bytes_mut().iter_mut().enumerate() } {
+        if is_wildcard_label && *byte != b'.' {
             // Protect against entries like '*test.abc'
             return None;
         } else {

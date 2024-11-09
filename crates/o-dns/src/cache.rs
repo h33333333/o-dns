@@ -42,7 +42,7 @@ impl Cache {
                 if rr.resource_data.get_query_type() != QueryType::OPT {
                     let cached_rr = CachedRecord::new(rr.clone(), response.header.z[1]);
                     let hash = cached_rr.get_hash();
-                    cached_section.get_or_insert_with(|| Vec::new()).push(hash);
+                    cached_section.get_or_insert(Vec::new()).push(hash);
                     self.rr_cache.insert(hash, cached_rr);
                 }
             });
@@ -51,7 +51,7 @@ impl Cache {
         let hash = get_dns_query_hash(
             response
                 .questions
-                .get(0)
+                .first()
                 .context("malformed response packet: question is missing")?,
         );
 
@@ -146,7 +146,7 @@ impl Cache {
                         return false;
                     }
 
-                    response_section.push(cached_rr.into_rr());
+                    response_section.push(cached_rr.as_rr());
                     *count += 1;
                 }
             }
@@ -205,7 +205,7 @@ impl CachedRecord {
             }
             ResourceData::NS { ns_domain_name } => hasher.update(ns_domain_name.as_bytes()),
             ResourceData::CNAME { cname } => hasher.update(cname.as_bytes()),
-            ResourceData::AAAA { address } => hasher.update(&address.octets()),
+            ResourceData::AAAA { address } => hasher.update(address.octets()),
             ResourceData::OPT { .. } => unreachable!("bug: we shouldn't cache OPT RRs"),
         };
 
@@ -214,7 +214,7 @@ impl CachedRecord {
         u128::from_be_bytes(hash[..16].try_into().unwrap())
     }
 
-    fn into_rr(&self) -> ResourceRecord<'static> {
+    fn as_rr(&self) -> ResourceRecord<'static> {
         let ttl = self.ttl.saturating_sub(self.added.elapsed().as_secs() as u32);
         ResourceRecord::new(
             self.qname.to_owned().into(),

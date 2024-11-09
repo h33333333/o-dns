@@ -101,7 +101,7 @@ impl<'a> EncodeToBuf for ResourceRecord<'a> {
 
 impl EncodedSize for ResourceRecord<'_> {
     fn get_encoded_size(&self, label_cache: Option<&HashMap<&str, usize>>) -> usize {
-        let qname_size = get_max_encoded_qname_size(&self.name, label_cache.as_deref());
+        let qname_size = get_max_encoded_qname_size(&self.name, label_cache);
         qname_size + 2 /* TYPE */ + 2 /* CLASS */ + 4 /* TTL */ + self.resource_data.get_encoded_size(label_cache)
     }
 }
@@ -198,7 +198,7 @@ impl<'a> ResourceData<'a> {
                         )
                     })?;
                     options
-                        .get_or_insert_with(|| Default::default())
+                        .get_or_insert_with(Default::default)
                         .insert(option, option_data.to_vec().into());
                     remaining_rd_length -= 4 + option_length;
                 }

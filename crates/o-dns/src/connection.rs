@@ -139,9 +139,6 @@ impl<U: AsyncUdpSocket> Connection<U> {
     }
 
     pub fn is_tcp(&self) -> bool {
-        match self {
-            Connection::Tcp(_) => true,
-            _ => false,
-        }
+        matches!(self, Connection::Tcp(_))
     }
 }

@@ -63,9 +63,9 @@ impl LogEntry {
         .bind(&self.domain)
         .bind(self.qtype)
         .bind(&self.client)
-        .bind(self.response_code as u8)
+        .bind(self.response_code)
         .bind(self.response_delay_ms)
-        .bind(self.source.as_ref().map(|src| *src as u8))
+        .bind(self.source.as_ref().map(|src| *src))
         .execute(connection)
         .await
         .context("error while inserting a log entry")?;

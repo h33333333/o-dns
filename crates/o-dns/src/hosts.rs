@@ -73,7 +73,7 @@ impl Denylist {
         };
 
         // Compare the qname against all regexes that we have
-        self.regexes.iter().find(|re| re.is_match(qname)).is_some()
+        self.regexes.iter().any(|re| re.is_match(qname))
     }
 
     fn find_wildcard_match(&self, qname: &str) -> bool {
