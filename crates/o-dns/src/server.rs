@@ -1,15 +1,16 @@
-use crate::db::get_sqlite_connection_pool;
-use crate::query_log::QueryLogger;
-use crate::{Args, Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
-use anyhow::Context as _;
-use o_dns_lib::FromBuf as _;
-use o_dns_lib::{ByteBuf, DnsPacket};
 use std::net::SocketAddr;
 use std::sync::Arc;
+
+use anyhow::Context as _;
+use o_dns_lib::{ByteBuf, DnsPacket, FromBuf as _};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::{JoinSet, LocalSet};
 use tracing::Instrument;
+
+use crate::db::get_sqlite_connection_pool;
+use crate::query_log::QueryLogger;
+use crate::{Args, Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 
 type HandlerResult = anyhow::Result<()>;
 

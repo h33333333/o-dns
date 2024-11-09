@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::util::hash_to_u128;
 use o_dns_lib::{QueryType, ResourceData};
 use regex::Regex;
+
+use crate::util::hash_to_u128;
 
 #[derive(Default)]
 pub struct Hosts {
@@ -14,11 +15,7 @@ impl Hosts {
         Default::default()
     }
 
-    pub fn add_entry(
-        &mut self,
-        qname_hash: u128,
-        rdata: ResourceData<'static>,
-    ) -> anyhow::Result<()> {
+    pub fn add_entry(&mut self, qname_hash: u128, rdata: ResourceData<'static>) -> anyhow::Result<()> {
         match rdata.get_query_type() {
             QueryType::A | QueryType::AAAA | QueryType::CNAME => {
                 self.map

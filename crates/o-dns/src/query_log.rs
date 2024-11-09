@@ -1,16 +1,11 @@
-use std::{
-    net::IpAddr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::net::IpAddr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use o_dns_lib::{DnsPacket, ResponseCode};
-use tokio::{
-    sync::mpsc::UnboundedReceiver,
-    time::{interval, Instant},
-};
-
 use sqlx::{SqliteConnection, SqlitePool};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::time::{interval, Instant};
 
 use crate::resolver::ResponseSource;
 

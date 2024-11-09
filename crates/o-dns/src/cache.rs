@@ -1,4 +1,5 @@
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
+use std::time::Instant;
 
 use anyhow::Context;
 use bitflags::bitflags;
@@ -35,19 +36,17 @@ impl Cache {
             (&response.additionals, &mut cached_query.additionals),
         ];
 
-        sections
-            .into_iter()
-            .for_each(|(response_section, cached_section)| {
-                response_section.iter().for_each(|rr| {
-                    // Don't cache OPT RRs
-                    if rr.resource_data.get_query_type() != QueryType::OPT {
-                        let cached_rr = CachedRecord::new(rr.clone(), response.header.z[1]);
-                        let hash = cached_rr.get_hash();
-                        cached_section.get_or_insert_with(|| Vec::new()).push(hash);
-                        self.rr_cache.insert(hash, cached_rr);
-                    }
-                });
+        sections.into_iter().for_each(|(response_section, cached_section)| {
+            response_section.iter().for_each(|rr| {
+                // Don't cache OPT RRs
+                if rr.resource_data.get_query_type() != QueryType::OPT {
+                    let cached_rr = CachedRecord::new(rr.clone(), response.header.z[1]);
+                    let hash = cached_rr.get_hash();
+                    cached_section.get_or_insert_with(|| Vec::new()).push(hash);
+                    self.rr_cache.insert(hash, cached_rr);
+                }
             });
+        });
 
         let hash = get_dns_query_hash(
             response
@@ -61,12 +60,7 @@ impl Cache {
         Ok(())
     }
 
-    pub fn question_lookup(
-        &self,
-        question: &Question,
-        response_packet: &mut DnsPacket,
-        dnssec: bool,
-    ) -> bool {
+    pub fn question_lookup(&self, question: &Question, response_packet: &mut DnsPacket, dnssec: bool) -> bool {
         let hash = get_dns_query_hash(question);
         let Some(cached_query) = self.query_cache.get(&hash) else {
             tracing::debug!(
@@ -139,9 +133,7 @@ impl Cache {
                         return false;
                     };
 
-                    if !include_dnssec_rrs
-                        && is_dnssec_qtype(cached_rr.resource_data.get_query_type().into())
-                    {
+                    if !include_dnssec_rrs && is_dnssec_qtype(cached_rr.resource_data.get_query_type().into()) {
                         continue;
                     }
 
@@ -223,9 +215,7 @@ impl CachedRecord {
     }
 
     fn into_rr(&self) -> ResourceRecord<'static> {
-        let ttl = self
-            .ttl
-            .saturating_sub(self.added.elapsed().as_secs() as u32);
+        let ttl = self.ttl.saturating_sub(self.added.elapsed().as_secs() as u32);
         ResourceRecord::new(
             self.qname.to_owned().into(),
             self.resource_data.clone(),
@@ -249,12 +239,10 @@ impl CachedQuery {
         let mut flags = CacheFlags::empty();
         flags.set(CacheFlags::AD, response_packet.header.z[1]);
 
-        if let Some(edns_data) = response_packet.edns.and_then(|idx| {
-            response_packet
-                .additionals
-                .get(idx)
-                .and_then(|rr| rr.get_edns_data())
-        }) {
+        if let Some(edns_data) = response_packet
+            .edns
+            .and_then(|idx| response_packet.additionals.get(idx).and_then(|rr| rr.get_edns_data()))
+        {
             flags.set(CacheFlags::DNSSEC, edns_data.dnssec_ok_bit);
         }
 

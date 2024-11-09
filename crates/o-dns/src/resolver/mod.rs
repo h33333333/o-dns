@@ -1,21 +1,20 @@
 mod upstream;
 
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
+
 use anyhow::Context as _;
 use o_dns_lib::{
-    ByteBuf, DnsPacket, EncodeToBuf as _, QueryType, Question, ResourceData, ResourceRecord,
-    ResponseCode,
+    ByteBuf, DnsPacket, EncodeToBuf as _, QueryType, Question, ResourceData, ResourceRecord, ResponseCode,
 };
-use std::{
-    net::{Ipv4Addr, Ipv6Addr},
-    sync::Arc,
-};
-use tokio::{net::UdpSocket, sync::mpsc::UnboundedSender, time::Instant};
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::time::Instant;
 use upstream::resolve_with_upstream;
 
-use crate::{
-    query_log::LogEntry, util::get_response_dns_packet, Connection, State,
-    DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE,
-};
+use crate::query_log::LogEntry;
+use crate::util::get_response_dns_packet;
+use crate::{Connection, State, DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ResponseSource {
@@ -71,12 +70,10 @@ impl Resolver {
             }
             let question = &query_packet.questions[0];
 
-            let dnssec = if let Some(edns_data) = query_packet.edns.and_then(|idx| {
-                query_packet
-                    .additionals
-                    .get(idx)
-                    .and_then(|rr| rr.get_edns_data())
-            }) {
+            let dnssec = if let Some(edns_data) = query_packet
+                .edns
+                .and_then(|idx| query_packet.additionals.get(idx).and_then(|rr| rr.get_edns_data()))
+            {
                 edns_data.dnssec_ok_bit
             } else {
                 false
@@ -109,22 +106,14 @@ impl Resolver {
             }
 
             // Check if query is cached
-            if self
-                .cache_lookup(question, &mut response_packet, dnssec)
-                .await
-            {
+            if self.cache_lookup(question, &mut response_packet, dnssec).await {
                 // Cache hit
                 break 'resolve (false, Some(ResponseSource::Cache));
             }
 
             // Try to resolve with the configured upstream resolver
             if let Err(e) = self
-                .resolve_with_upstream(
-                    question,
-                    query_packet.header.id,
-                    dnssec,
-                    &mut response_packet,
-                )
+                .resolve_with_upstream(question, query_packet.header.id, dnssec, &mut response_packet)
                 .await
             {
                 tracing::debug!(resolver = ?self.state.upstream_resolver, "Upstream resolution failed: {:#}", e);
@@ -147,8 +136,7 @@ impl Resolver {
             .encode_to_buf(
                 &mut dst,
                 // UDP: truncate the response if the requestor's buffer is too small
-                (!connection.is_tcp())
-                    .then(|| requestor_edns_buf_size.unwrap_or(MAX_STANDARD_DNS_MSG_SIZE)),
+                (!connection.is_tcp()).then(|| requestor_edns_buf_size.unwrap_or(MAX_STANDARD_DNS_MSG_SIZE)),
             )
             .context("error while encoding the response")?;
 
@@ -183,21 +171,12 @@ impl Resolver {
         Ok(())
     }
 
-    async fn cache_lookup(
-        &self,
-        question: &Question<'_>,
-        response_packet: &mut DnsPacket<'_>,
-        dnssec: bool,
-    ) -> bool {
+    async fn cache_lookup(&self, question: &Question<'_>, response_packet: &mut DnsPacket<'_>, dnssec: bool) -> bool {
         let cache = self.state.cache.read().await;
         cache.question_lookup(question, response_packet, dnssec)
     }
 
-    async fn denylist_lookup<'a>(
-        &self,
-        question: &Question<'a>,
-        response_packet: &mut DnsPacket<'a>,
-    ) -> bool {
+    async fn denylist_lookup<'a>(&self, question: &Question<'a>, response_packet: &mut DnsPacket<'a>) -> bool {
         let cache = self.state.denylist.read().await;
         let is_in_denylist = cache.contains_entry(&question.qname);
         drop(cache);
@@ -225,11 +204,7 @@ impl Resolver {
         is_in_denylist
     }
 
-    async fn allowlist_lookup<'a>(
-        &self,
-        question: &Question<'a>,
-        response_packet: &mut DnsPacket<'a>,
-    ) -> bool {
+    async fn allowlist_lookup<'a>(&self, question: &Question<'a>, response_packet: &mut DnsPacket<'a>) -> bool {
         let cache = self.state.hosts.read().await;
         let allowlist_records = cache.get_entry(question.qname.as_ref());
 
@@ -242,8 +217,7 @@ impl Resolver {
                     qtype => rdata.get_query_type() == qtype,
                 })
                 .for_each(|rdata| {
-                    let rr =
-                        ResourceRecord::new(question.qname.clone(), rdata.clone(), Some(180), None);
+                    let rr = ResourceRecord::new(question.qname.clone(), rdata.clone(), Some(180), None);
                     response_packet.answers.push(rr);
                     response_packet.header.answer_rr_count += 1;
                 });
@@ -259,17 +233,13 @@ impl Resolver {
         dnssec: bool,
         response_packet: &mut DnsPacket<'_>,
     ) -> anyhow::Result<()> {
-        let upstream_response =
-            match resolve_with_upstream(question, id, self.state.upstream_resolver, dnssec).await {
-                Ok((upstream_response, _)) => upstream_response,
-                Err(e) => {
-                    response_packet.header.response_code = ResponseCode::ServerFailure;
-                    anyhow::bail!(
-                        "Error while forwarding a request to the upstream resolver: {:#}",
-                        e
-                    );
-                }
-            };
+        let upstream_response = match resolve_with_upstream(question, id, self.state.upstream_resolver, dnssec).await {
+            Ok((upstream_response, _)) => upstream_response,
+            Err(e) => {
+                response_packet.header.response_code = ResponseCode::ServerFailure;
+                anyhow::bail!("Error while forwarding a request to the upstream resolver: {:#}", e);
+            }
+        };
 
         response_packet.questions = upstream_response.questions;
         response_packet.header.question_count = upstream_response.header.question_count;

@@ -7,6 +7,10 @@ mod question;
 mod resource_record;
 mod utils;
 
+use core::str;
+use std::collections::HashMap;
+
+use anyhow::Context;
 use buf::EncodedSize;
 pub use buf::{ByteBuf, EncodeToBuf, FromBuf};
 use cfg_if::cfg_if;
@@ -15,10 +19,6 @@ pub use question::{QueryType, Question};
 #[cfg(feature = "edns")]
 pub use resource_record::EdnsData;
 pub use resource_record::{ResourceData, ResourceRecord};
-
-use anyhow::Context;
-use core::str;
-use std::collections::HashMap;
 
 pub const IN_CLASS: u16 = 1;
 
@@ -46,22 +46,21 @@ impl FromBuf for DnsPacket<'_> {
 
         let mut questions = Vec::with_capacity(header.question_count as usize);
         for idx in 0..header.question_count {
-            let question = Question::from_buf(buf)
-                .with_context(|| format!("question parsing error at idx {}", idx))?;
+            let question = Question::from_buf(buf).with_context(|| format!("question parsing error at idx {}", idx))?;
             questions.push(question);
         }
 
         let mut answers = Vec::with_capacity(header.answer_rr_count as usize);
         for idx in 0..header.answer_rr_count {
-            let answer = ResourceRecord::from_buf(buf)
-                .with_context(|| format!("answer RR parsing error at idx {}", idx))?;
+            let answer =
+                ResourceRecord::from_buf(buf).with_context(|| format!("answer RR parsing error at idx {}", idx))?;
             answers.push(answer);
         }
 
         let mut authorities = Vec::with_capacity(header.authority_rr_count as usize);
         for idx in 0..header.authority_rr_count {
-            let authority = ResourceRecord::from_buf(buf)
-                .with_context(|| format!("authority RR parsing error at idx {}", idx))?;
+            let authority =
+                ResourceRecord::from_buf(buf).with_context(|| format!("authority RR parsing error at idx {}", idx))?;
             authorities.push(authority);
         }
 
@@ -69,8 +68,8 @@ impl FromBuf for DnsPacket<'_> {
         let mut edns = None;
         let mut additionals = Vec::with_capacity(header.additional_rr_count as usize);
         for idx in 0..header.additional_rr_count {
-            let additional = ResourceRecord::from_buf(buf)
-                .with_context(|| format!("additional RR parsing error at idx {}", idx))?;
+            let additional =
+                ResourceRecord::from_buf(buf).with_context(|| format!("additional RR parsing error at idx {}", idx))?;
             #[cfg(feature = "edns")]
             if additional.resource_data.get_query_type() == QueryType::OPT {
                 if let Some(old_idx) = edns.replace(additionals.len()) {
@@ -121,9 +120,7 @@ impl<'a> EncodeToBuf for DnsPacket<'a> {
         // Remember header's position in order to update the truncation bit and RR counts
         let dns_header_pos = buf.len();
         // Header's size is already accounted for
-        self.header
-            .encode_to_buf(buf, None)
-            .context("writing header")?;
+        self.header.encode_to_buf(buf, None).context("writing header")?;
 
         // Track whether we truncated any RRs/questions while encoding
         let mut truncation = false;
@@ -258,10 +255,11 @@ impl<'a> EncodeToBuf for DnsPacket<'a> {
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
-    use super::*;
     use prop::collection::vec;
     use proptest::prelude::*;
     use test_utils::{arb_question, arb_resource_record};
+
+    use super::*;
 
     prop_compose! {
         fn arb_dns_header_with_counts(
@@ -300,51 +298,39 @@ mod tests {
 
     fn arb_dns_packet() -> impl Strategy<Value = DnsPacket<'static>> {
         (0..5u16, 0..5u16, 0..5u16, 0..5u16)
-            .prop_flat_map(
-                |(questions_len, answers_len, authorities_len, additionals_len)| {
-                    let additionals = vec(arb_resource_record(), additionals_len as usize);
-                    #[cfg(feature = "edns")]
-                    let additionals =
-                        additionals.prop_filter("DNS packet with multiple OPT RRs", |vec| {
-                            (0..=1).contains(
-                                &vec.iter()
-                                    .filter(|rr| {
-                                        rr.resource_data.get_query_type() == QueryType::OPT
-                                    })
-                                    .count(),
-                            )
-                        });
-                    (
-                        arb_dns_header_with_counts(
-                            questions_len,
-                            answers_len,
-                            authorities_len,
-                            additionals_len,
-                        ),
-                        vec(arb_question(), questions_len as usize),
-                        vec(arb_resource_record(), answers_len as usize),
-                        vec(arb_resource_record(), authorities_len as usize),
-                        additionals,
+            .prop_flat_map(|(questions_len, answers_len, authorities_len, additionals_len)| {
+                let additionals = vec(arb_resource_record(), additionals_len as usize);
+                #[cfg(feature = "edns")]
+                let additionals = additionals.prop_filter("DNS packet with multiple OPT RRs", |vec| {
+                    (0..=1).contains(
+                        &vec.iter()
+                            .filter(|rr| rr.resource_data.get_query_type() == QueryType::OPT)
+                            .count(),
                     )
-                        .prop_map(
-                            |(header, questions, answers, authorities, additionals)| {
-                                #[cfg(feature = "edns")]
-                                let edns = additionals.iter().position(|rr| {
-                                    rr.resource_data.get_query_type() == QueryType::OPT
-                                });
-                                DnsPacket {
-                                    header,
-                                    #[cfg(feature = "edns")]
-                                    edns,
-                                    questions,
-                                    answers,
-                                    authorities,
-                                    additionals,
-                                }
-                            },
-                        )
-                },
-            )
+                });
+                (
+                    arb_dns_header_with_counts(questions_len, answers_len, authorities_len, additionals_len),
+                    vec(arb_question(), questions_len as usize),
+                    vec(arb_resource_record(), answers_len as usize),
+                    vec(arb_resource_record(), authorities_len as usize),
+                    additionals,
+                )
+                    .prop_map(|(header, questions, answers, authorities, additionals)| {
+                        #[cfg(feature = "edns")]
+                        let edns = additionals
+                            .iter()
+                            .position(|rr| rr.resource_data.get_query_type() == QueryType::OPT);
+                        DnsPacket {
+                            header,
+                            #[cfg(feature = "edns")]
+                            edns,
+                            questions,
+                            answers,
+                            authorities,
+                            additionals,
+                        }
+                    })
+            })
             .boxed()
     }
 
@@ -399,9 +385,7 @@ mod tests {
         // Add counts
         dns_packet.header.question_count = 1;
         // Add questions
-        dns_packet
-            .questions
-            .push(Question::new("test.com", QueryType::A, None));
+        dns_packet.questions.push(Question::new("test.com", QueryType::A, None));
 
         let mut buf = ByteBuf::new_empty(None);
         // 12 bytes are enough only for the header
@@ -426,9 +410,7 @@ mod tests {
         dns_packet.header.question_count = 1;
         dns_packet.header.answer_rr_count = 1;
         // Add questions
-        dns_packet
-            .questions
-            .push(Question::new("test.com", QueryType::A, None));
+        dns_packet.questions.push(Question::new("test.com", QueryType::A, None));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
             "test.com".into(),
@@ -465,9 +447,7 @@ mod tests {
         dns_packet.header.answer_rr_count = 1;
         dns_packet.header.authority_rr_count = 1;
         // Add questions
-        dns_packet
-            .questions
-            .push(Question::new("test.com", QueryType::A, None));
+        dns_packet.questions.push(Question::new("test.com", QueryType::A, None));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
             "test.com".into(),
@@ -509,9 +489,7 @@ mod tests {
         dns_packet.header.authority_rr_count = 1;
         dns_packet.header.additional_rr_count = 1;
         // Add questions
-        dns_packet
-            .questions
-            .push(Question::new("test.com", QueryType::A, None));
+        dns_packet.questions.push(Question::new("test.com", QueryType::A, None));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
             "test.com".into(),
@@ -555,9 +533,7 @@ mod tests {
         dns_packet.header.question_count = 1;
         dns_packet.header.answer_rr_count = 2;
         // Add questions
-        dns_packet
-            .questions
-            .push(Question::new("test.com", QueryType::A, None));
+        dns_packet.questions.push(Question::new("test.com", QueryType::A, None));
         // Add answers
         dns_packet.answers.push(ResourceRecord::new(
             "test.com".into(),
@@ -621,9 +597,7 @@ mod tests {
         dns_packet.header.question_count = 1;
         dns_packet.header.additional_rr_count = 1;
         // Add questions
-        dns_packet
-            .questions
-            .push(Question::new("test.com", QueryType::A, None));
+        dns_packet.questions.push(Question::new("test.com", QueryType::A, None));
         // Add OPT RR
         dns_packet.additionals.push(ResourceRecord::new(
             "".into(),

@@ -1,12 +1,14 @@
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::path::Path;
+
 use anyhow::Context;
 use o_dns_lib::{DnsPacket, QueryType, Question, ResourceData, ResourceRecord, ResponseCode};
 use regex::Regex;
 use sha1::Digest;
-use std::{borrow::Cow, collections::HashMap, net::IpAddr, path::Path};
-use tokio::{
-    fs::File,
-    io::{AsyncBufReadExt, BufReader},
-};
+use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::{Denylist, Hosts, DEFAULT_EDNS_BUF_CAPACITY, EDNS_DO_BIT};
 
@@ -47,16 +49,15 @@ impl EntryFromStr for Denylist {
             // Handle regex
             let (regex_str, remaining_line) = parse_regex(line).context("failed to parse regex")?;
 
-            let regex = Regex::new(regex_str)
-                .map_err(|e| anyhow::anyhow!("failed to compile regex '{}': {}", regex_str, e))?;
+            let regex =
+                Regex::new(regex_str).map_err(|e| anyhow::anyhow!("failed to compile regex '{}': {}", regex_str, e))?;
 
             self.add_regex(regex);
 
             remaining_line
         } else {
             // Handle domain
-            let (domain, remaining_line) =
-                parse_domain_name(line).context("failed to parse domain")?;
+            let (domain, remaining_line) = parse_domain_name(line).context("failed to parse domain")?;
 
             self.add_entry(hash_to_u128(domain, None));
 
@@ -83,12 +84,10 @@ pub fn get_response_dns_packet(
         // CD bit
         packet.header.z[2] = request_packet.header.z[2];
         // Include OPT RR if requestor supports EDNS
-        if let Some(edns_data) = request_packet.edns.and_then(|idx| {
-            request_packet
-                .additionals
-                .get(idx)
-                .and_then(|rr| rr.get_edns_data())
-        }) {
+        if let Some(edns_data) = request_packet
+            .edns
+            .and_then(|idx| request_packet.additionals.get(idx).and_then(|rr| rr.get_edns_data()))
+        {
             let flags = edns_data.dnssec_ok_bit.then_some(EDNS_DO_BIT);
             packet
                 .additionals
@@ -119,17 +118,8 @@ pub fn get_query_dns_packet(id: Option<u16>, enable_dnssec: bool) -> DnsPacket<'
     packet
 }
 
-pub fn get_edns_rr(
-    buf_size: u16,
-    options: Option<HashMap<u16, Cow<'_, [u8]>>>,
-    flags: Option<u32>,
-) -> ResourceRecord {
-    ResourceRecord::new(
-        "".into(),
-        ResourceData::OPT { options },
-        flags,
-        Some(buf_size),
-    )
+pub fn get_edns_rr(buf_size: u16, options: Option<HashMap<u16, Cow<'_, [u8]>>>, flags: Option<u32>) -> ResourceRecord {
+    ResourceRecord::new("".into(), ResourceData::OPT { options }, flags, Some(buf_size))
 }
 
 pub fn get_dns_query_hash(question: &Question) -> u128 {
@@ -181,12 +171,7 @@ async fn parse_list_file<T: EntryFromStr>(path: &Path, processor: &mut T) -> any
         // Clear the buffer
         line.clear();
 
-        if file
-            .read_line(&mut line)
-            .await
-            .context("error while reading a line")?
-            == 0
-        {
+        if file.read_line(&mut line).await.context("error while reading a line")? == 0 {
             // Reached EOF
             break;
         }
@@ -202,11 +187,7 @@ async fn parse_list_file<T: EntryFromStr>(path: &Path, processor: &mut T) -> any
         }
 
         if let Err(e) = processor.process_line(remaining_line) {
-            tracing::debug!(
-                "Error while processing the line '{}': {}",
-                remaining_line,
-                e
-            );
+            tracing::debug!("Error while processing the line '{}': {}", remaining_line, e);
             continue;
         }
     }

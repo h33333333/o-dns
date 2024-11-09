@@ -1,8 +1,11 @@
-use crate::{
-    buf::EncodedSize, utils::get_max_encoded_qname_size, ByteBuf, EncodeToBuf, FromBuf, IN_CLASS,
-};
+use std::borrow::Cow;
+use std::collections::HashMap;
+
 use anyhow::Context;
-use std::{borrow::Cow, collections::HashMap};
+
+use crate::buf::EncodedSize;
+use crate::utils::get_max_encoded_qname_size;
+use crate::{ByteBuf, EncodeToBuf, FromBuf, IN_CLASS};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -97,10 +100,8 @@ impl<'a> EncodeToBuf for Question<'a> {
         if max_size.is_some_and(|max_size| encoded_size > max_size) {
             return Ok(0);
         }
-        buf.write_qname(&self.qname, label_cache)
-            .context("writing QNAME")?;
-        buf.write_u16(self.query_type.into())
-            .context("writing QTYPE")?;
+        buf.write_qname(&self.qname, label_cache).context("writing QNAME")?;
+        buf.write_u16(self.query_type.into()).context("writing QTYPE")?;
         buf.write_u16(self.qclass).context("writing QCLASS")?;
 
         Ok(encoded_size)
@@ -116,9 +117,10 @@ impl EncodedSize for Question<'_> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::test_utils::arb_question;
-    use proptest::prelude::*;
 
     proptest! {
         #[test]

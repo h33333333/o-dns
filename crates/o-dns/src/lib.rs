@@ -15,9 +15,11 @@ mod db;
 mod query_log;
 mod util;
 
+use std::net::SocketAddr;
+use std::path::Path;
+
 use anyhow::Context as _;
 use cache::Cache;
-use std::{net::SocketAddr, path::Path};
 use tokio::sync::RwLock;
 use util::{parse_denylist_file, parse_hosts_file};
 
