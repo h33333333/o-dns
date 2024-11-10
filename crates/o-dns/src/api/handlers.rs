@@ -4,11 +4,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse as _, Response};
 use axum::Json;
 use serde::Deserialize;
-use sqlx::SqlitePool;
 
 use super::util::build_select_query_with_filters;
 use super::ApiState;
-use crate::db::LogEntry;
+use crate::db::{LogEntry, SqliteDb};
 
 pub async fn health_check(State(_): State<ApiState>) -> &'static str {
     "I'm alive"
@@ -32,7 +31,7 @@ pub enum Sort {
 }
 
 pub async fn get_query_logs(State(state): State<ApiState>, Query(filter): Query<LatestLogsFilter>) -> Response {
-    let logs = match get_latest_logs_handler(state.connection_pool, &filter).await {
+    let logs = match get_latest_logs_handler(state.db, &filter).await {
         Ok(logs) => logs,
         Err(e) => {
             tracing::debug!(filter = ?filter, "Error while getting latest logs: {}", e);
@@ -43,15 +42,14 @@ pub async fn get_query_logs(State(state): State<ApiState>, Query(filter): Query<
     Json(logs).into_response()
 }
 
-async fn get_latest_logs_handler(
-    connection_pool: SqlitePool,
-    filter: &LatestLogsFilter,
-) -> anyhow::Result<Vec<LogEntry>> {
+async fn get_latest_logs_handler(db: SqliteDb, filter: &LatestLogsFilter) -> anyhow::Result<Vec<LogEntry>> {
     let mut query = build_select_query_with_filters(filter);
+
+    let mut connection = db.get_connection().await?;
 
     let logs: Vec<LogEntry> = query
         .build_query_as()
-        .fetch_all(&connection_pool)
+        .fetch_all(&mut *connection)
         .await
         .context("failed to get data from DB")?;
 

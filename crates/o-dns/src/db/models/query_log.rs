@@ -4,9 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Context as _;
 use o_dns_lib::DnsPacket;
 use serde::Serialize;
-use sqlx::prelude::FromRow;
-use sqlx::SqliteConnection;
+use sqlx::{FromRow, SqliteConnection};
 
+use super::Model;
 use crate::resolver::ResponseSource;
 
 #[derive(Debug, Serialize, FromRow)]
@@ -49,9 +49,13 @@ impl LogEntry {
             source: source.map(|src| src as u8),
         })
     }
+}
 
-    pub async fn insert_into(&self, connection: &mut SqliteConnection) -> anyhow::Result<()> {
-        let query_result = sqlx::query(
+impl Model for LogEntry {
+    const NAME: &str = "LogEntry";
+
+    async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
+        sqlx::query(
             "INSERT INTO query_log (timestamp, domain, qtype, client, response_code, response_delay_ms, source)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
@@ -64,15 +68,7 @@ impl LogEntry {
         .bind(self.source.as_ref().map(|src| *src))
         .execute(connection)
         .await
-        .context("error while inserting a log entry")?;
-
-        if query_result.rows_affected() != 1 {
-            anyhow::bail!(
-                "error while inserting a log entry: wrong number of inserted rows {}",
-                query_result.rows_affected()
-            )
-        }
-
-        Ok(())
+        .context("error while inserting a log entry")
+        .map(|result| result.rows_affected())
     }
 }

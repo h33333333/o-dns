@@ -6,7 +6,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinSet;
 
 use crate::api::ApiServer;
-use crate::db::get_sqlite_connection_pool;
+use crate::db::SqliteDb;
 use crate::query_logger::QueryLogger;
 use crate::{Args, DnsServer};
 
@@ -22,11 +22,16 @@ impl App {
         // Channel for query logs
         let (log_tx, log_rx) = unbounded_channel();
 
-        let connection_pool = get_sqlite_connection_pool(&args.query_log_path)
+        let sqlite_db = SqliteDb::new(&args.query_log_path)
             .await
-            .context("failed to create an SQLite connection pool")?;
+            .context("failed to establish an SQLite DB connection")?;
 
-        let query_logger = QueryLogger::new(log_rx, connection_pool.clone())
+        sqlite_db
+            .init_tables()
+            .await
+            .context("failed to initialize DB tables")?;
+
+        let query_logger = QueryLogger::new(log_rx, sqlite_db.clone())
             .await
             .context("error while creating a query logger")?;
 
@@ -46,7 +51,7 @@ impl App {
         tasks.spawn(query_logger.watch_for_logs());
         if !args.disable_api_server {
             let api_server_bind_addr = SocketAddr::new(args.host, args.api_server_port);
-            let api_server = ApiServer::new(connection_pool);
+            let api_server = ApiServer::new(sqlite_db);
             tasks.spawn(api_server.serve(api_server_bind_addr));
         }
 

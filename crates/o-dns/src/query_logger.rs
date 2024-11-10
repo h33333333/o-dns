@@ -1,25 +1,21 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use sqlx::SqlitePool;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{interval, Instant};
 
-use crate::db::LogEntry;
+use crate::db::{LogEntry, Model as _, SqliteDb};
 
 const DEFAULT_LOG_CHUNK: usize = 64;
 
 pub struct QueryLogger {
-    connection_pool: SqlitePool,
+    db: SqliteDb,
     log_rx: UnboundedReceiver<LogEntry>,
 }
 
 impl QueryLogger {
-    pub async fn new(log_rx: UnboundedReceiver<LogEntry>, connection_pool: SqlitePool) -> anyhow::Result<Self> {
-        Ok(QueryLogger {
-            connection_pool,
-            log_rx,
-        })
+    pub async fn new(log_rx: UnboundedReceiver<LogEntry>, db: SqliteDb) -> anyhow::Result<Self> {
+        Ok(QueryLogger { db, log_rx })
     }
 
     pub async fn watch_for_logs(mut self) -> anyhow::Result<()> {
@@ -49,11 +45,8 @@ impl QueryLogger {
             };
 
             let start = Instant::now();
-            let mut tx = self
-                .connection_pool
-                .begin()
-                .await
-                .context("error while creating a transaction")?;
+
+            let mut tx = self.db.begin_transaction().await?;
 
             for log in logs.iter() {
                 log.insert_into(&mut tx)
