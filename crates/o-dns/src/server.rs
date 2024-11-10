@@ -9,7 +9,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinSet;
 use tracing::Instrument;
 
-use crate::query_logger::LogEntry;
+use crate::db::LogEntry;
 use crate::{Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 
 type HandlerResult = anyhow::Result<()>;

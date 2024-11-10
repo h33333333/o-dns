@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
 use upstream::resolve_with_upstream;
 
-use crate::query_logger::LogEntry;
+use crate::db::LogEntry;
 use crate::util::get_response_dns_packet;
 use crate::{Connection, State, DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE};
 

@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 
 use super::util::build_select_query_with_filters;
 use super::ApiState;
-use crate::query_logger::LogEntry;
+use crate::db::LogEntry;
 
 pub async fn health_check(State(_): State<ApiState>) -> &'static str {
     "I'm alive"

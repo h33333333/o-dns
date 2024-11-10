@@ -1,7 +1,9 @@
+mod model;
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context as _;
+pub use model::LogEntry;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
