@@ -2,7 +2,7 @@ mod list_entry;
 mod query_log;
 
 use anyhow::Context as _;
-pub use list_entry::ListEntry;
+pub use list_entry::{EntryKind, ListEntry};
 pub use query_log::QueryLog;
 use serde::Serialize;
 use sqlx::sqlite::SqliteRow;

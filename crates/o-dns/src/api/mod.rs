@@ -3,6 +3,7 @@ mod routes;
 mod util;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use axum::Router;
@@ -10,14 +11,15 @@ use routes::get_router;
 use tokio::net::TcpListener;
 
 use crate::db::SqliteDb;
+use crate::State;
 
 pub struct ApiServer {
     router: Router,
 }
 
 impl ApiServer {
-    pub fn new(db: SqliteDb) -> Self {
-        let state = ApiState { db };
+    pub fn new(db: SqliteDb, resolver_state: State) -> Self {
+        let state = ApiState { db, resolver_state };
         let router = get_router(state);
 
         ApiServer { router }
@@ -34,7 +36,7 @@ impl ApiServer {
     }
 }
 
-#[derive(Clone)]
 struct ApiState {
     db: SqliteDb,
+    resolver_state: State,
 }

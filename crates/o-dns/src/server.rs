@@ -14,6 +14,10 @@ use crate::{Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 
 type HandlerResult = anyhow::Result<()>;
 
+pub enum Command {
+    AddNewListEntry,
+}
+
 pub struct DnsServer {
     udp_socket: Arc<UdpSocket>,
     tcp_listener: Arc<TcpListener>,

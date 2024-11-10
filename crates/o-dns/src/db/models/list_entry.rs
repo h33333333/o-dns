@@ -32,7 +32,7 @@ impl TryFrom<u8> for EntryKind {
 pub struct ListEntry {
     pub id: u32,
     pub timestamp: u32,
-    pub domain: String,
+    pub domain: Option<String>,
     pub kind: EntryKind,
     pub data: String,
 }
@@ -58,7 +58,7 @@ impl<'r> FromRow<'r, SqliteRow> for ListEntry {
 }
 
 impl ListEntry {
-    pub fn new(domain: String, kind: EntryKind, data: String) -> anyhow::Result<Self> {
+    pub fn new(domain: Option<String>, kind: EntryKind, data: String) -> anyhow::Result<Self> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context("bug: misconfigured time on the system")?
