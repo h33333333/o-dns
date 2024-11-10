@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context as _;
-pub use models::{Model, QueryLog};
+pub use models::{ListEntry, Model, QueryLog};
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Sqlite, SqlitePool, Transaction};
@@ -50,7 +50,20 @@ impl SqliteDb {
         )
         .execute(&self.connection_pool)
         .await
-        .context("error while initializing the DB")?;
+        .context("error while initializing the 'query_log' table")?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS allow_deny_list (
+                id INTEGER PRIMARY KEY,
+                timestamp INTEGER NOT NULL,
+                domain TEXT NOT NULL,
+                kind INTEGER NOT NULL,
+                data TEXT NOT NULL
+            )",
+        )
+        .execute(&self.connection_pool)
+        .await
+        .context("error while initializing the 'allow_deny_list' table")?;
 
         Ok(())
     }

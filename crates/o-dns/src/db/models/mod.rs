@@ -1,6 +1,8 @@
+mod list_entry;
 mod query_log;
 
 use anyhow::Context as _;
+pub use list_entry::ListEntry;
 pub use query_log::QueryLog;
 use serde::Serialize;
 use sqlx::sqlite::SqliteRow;
@@ -8,6 +10,7 @@ use sqlx::{FromRow, SqliteConnection};
 
 pub trait Model: Serialize + for<'a> FromRow<'a, SqliteRow> {
     const NAME: &str;
+    const TABLE: &str;
 
     async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64>;
 
