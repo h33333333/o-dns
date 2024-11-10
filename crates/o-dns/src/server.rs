@@ -9,7 +9,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinSet;
 use tracing::Instrument;
 
-use crate::db::LogEntry;
+use crate::db::QueryLog;
 use crate::{Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 
 type HandlerResult = anyhow::Result<()>;
@@ -27,7 +27,7 @@ impl DnsServer {
         resolver_addr: SocketAddr,
         denylist_path: Option<&Path>,
         allowlist_path: Option<&Path>,
-        log_tx: UnboundedSender<LogEntry>,
+        log_tx: UnboundedSender<QueryLog>,
     ) -> anyhow::Result<Self> {
         let udp_socket = Arc::new(
             UdpSocket::bind(listen_on)
@@ -60,7 +60,7 @@ impl DnsServer {
         resolver_addr: SocketAddr,
         denylist_path: Option<&Path>,
         allowlist_path: Option<&Path>,
-        log_tx: UnboundedSender<LogEntry>,
+        log_tx: UnboundedSender<QueryLog>,
         max_parallel_connections: u8,
     ) -> anyhow::Result<Self> {
         let mut server = DnsServer::new(listen_on, resolver_addr, denylist_path, allowlist_path, log_tx).await?;

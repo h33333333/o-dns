@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
 use upstream::resolve_with_upstream;
 
-use crate::db::LogEntry;
+use crate::db::QueryLog;
 use crate::util::get_response_dns_packet;
 use crate::{Connection, State, DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE};
 
@@ -27,11 +27,11 @@ pub enum ResponseSource {
 
 pub struct Resolver {
     state: Arc<State>,
-    log_tx: UnboundedSender<LogEntry>,
+    log_tx: UnboundedSender<QueryLog>,
 }
 
 impl Resolver {
-    pub fn new(state: State, log_tx: UnboundedSender<LogEntry>) -> Self {
+    pub fn new(state: State, log_tx: UnboundedSender<QueryLog>) -> Self {
         Resolver {
             state: Arc::new(state),
             log_tx,
@@ -152,7 +152,7 @@ impl Resolver {
             tracing::error!("Error while sending a DNS response: {:#}", e)
         };
 
-        let log_entry = match LogEntry::new_from_response(
+        let log_entry = match QueryLog::new_from_response(
             &response_packet,
             connection.get_client_addr().ok(),
             start.elapsed().as_millis() as u32,

@@ -1,7 +1,7 @@
 mod query_log;
 
 use anyhow::Context as _;
-pub use query_log::LogEntry;
+pub use query_log::QueryLog;
 use serde::Serialize;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{FromRow, SqliteConnection};

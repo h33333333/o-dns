@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use super::util::build_select_query_with_filters;
 use super::ApiState;
-use crate::db::{LogEntry, SqliteDb};
+use crate::db::{QueryLog, SqliteDb};
 
 pub async fn health_check(State(_): State<ApiState>) -> &'static str {
     "I'm alive"
@@ -42,12 +42,12 @@ pub async fn get_query_logs(State(state): State<ApiState>, Query(filter): Query<
     Json(logs).into_response()
 }
 
-async fn get_latest_logs_handler(db: SqliteDb, filter: &LatestLogsFilter) -> anyhow::Result<Vec<LogEntry>> {
+async fn get_latest_logs_handler(db: SqliteDb, filter: &LatestLogsFilter) -> anyhow::Result<Vec<QueryLog>> {
     let mut query = build_select_query_with_filters(filter);
 
     let mut connection = db.get_connection().await?;
 
-    let logs: Vec<LogEntry> = query
+    let logs: Vec<QueryLog> = query
         .build_query_as()
         .fetch_all(&mut *connection)
         .await

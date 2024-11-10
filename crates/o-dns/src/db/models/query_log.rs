@@ -10,7 +10,7 @@ use super::Model;
 use crate::resolver::ResponseSource;
 
 #[derive(Debug, Serialize, FromRow)]
-pub struct LogEntry {
+pub struct QueryLog {
     pub id: u32,
     pub timestamp: u32,
     pub domain: String,
@@ -21,7 +21,7 @@ pub struct LogEntry {
     pub source: Option<u8>,
 }
 
-impl LogEntry {
+impl QueryLog {
     pub fn new_from_response(
         response: &DnsPacket<'_>,
         client: Option<IpAddr>,
@@ -38,7 +38,7 @@ impl LogEntry {
             .first()
             .context("bug: missing question in the response packet")?;
 
-        Ok(LogEntry {
+        Ok(QueryLog {
             id: 0,
             timestamp,
             domain: question.qname.clone().into_owned(),
@@ -51,7 +51,7 @@ impl LogEntry {
     }
 }
 
-impl Model for LogEntry {
+impl Model for QueryLog {
     const NAME: &str = "LogEntry";
 
     async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {

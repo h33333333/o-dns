@@ -4,17 +4,17 @@ use anyhow::Context;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{interval, Instant};
 
-use crate::db::{LogEntry, Model as _, SqliteDb};
+use crate::db::{Model as _, QueryLog, SqliteDb};
 
 const DEFAULT_LOG_CHUNK: usize = 64;
 
 pub struct QueryLogger {
     db: SqliteDb,
-    log_rx: UnboundedReceiver<LogEntry>,
+    log_rx: UnboundedReceiver<QueryLog>,
 }
 
 impl QueryLogger {
-    pub async fn new(log_rx: UnboundedReceiver<LogEntry>, db: SqliteDb) -> anyhow::Result<Self> {
+    pub async fn new(log_rx: UnboundedReceiver<QueryLog>, db: SqliteDb) -> anyhow::Result<Self> {
         Ok(QueryLogger { db, log_rx })
     }
 
