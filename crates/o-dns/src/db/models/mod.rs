@@ -10,7 +10,6 @@ use sqlx::{FromRow, SqliteConnection};
 
 pub trait Model: Serialize + for<'a> FromRow<'a, SqliteRow> {
     const NAME: &str;
-    const TABLE: &str;
 
     async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64>;
 

@@ -76,14 +76,12 @@ impl ListEntry {
 
 impl Model for ListEntry {
     const NAME: &str = "LogEntry";
-    const TABLE: &str = "allow_deny_list";
 
     async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
         sqlx::query(
-            "INSERT INTO ?1 (timestamp, domain, kind, data)
-            VALUES (?2, ?3, ?4, ?5)",
+            "INSERT INTO allow_deny_list (timestamp, domain, kind, data)
+            VALUES (?1, ?2, ?3, ?4)",
         )
-        .bind(Self::TABLE)
         .bind(self.timestamp)
         .bind(&self.domain)
         .bind(self.kind as u8)

@@ -12,6 +12,7 @@ use serde::Deserialize;
 use super::util::build_select_query_with_filters;
 use super::ApiState;
 use crate::db::{EntryKind, ListEntry, Model as _, QueryLog, SqliteDb};
+use crate::server::{DnsServerCommand, ListEntryKind};
 
 pub async fn health_check(State(_): State<Arc<ApiState>>) -> &'static str {
     "I'm alive"
@@ -35,22 +36,40 @@ pub async fn add_new_list_entry(State(state): State<Arc<ApiState>>, Json(entry):
     };
 
     // Validate data
-    match kind {
-        EntryKind::Deny => (),
+    let cmd = match kind {
+        EntryKind::Deny => {
+            let Some(domain) = entry.domain.clone() else {
+                return (StatusCode::BAD_REQUEST, "Missing 'domain' for a deny entry").into_response();
+            };
+            DnsServerCommand::AddNewListEntry(ListEntryKind::DenyDomain(domain))
+        }
         EntryKind::DenyRegex => {
-            if let Err(e) = Regex::new(&entry.data) {
-                return (StatusCode::BAD_REQUEST, format!("Invalid regex: {:#}", e)).into_response();
-            }
+            let regex = match Regex::new(&entry.data) {
+                Ok(regex) => regex,
+                Err(e) => {
+                    return (StatusCode::BAD_REQUEST, format!("Invalid regex: {:#}", e)).into_response();
+                }
+            };
+            DnsServerCommand::AddNewListEntry(ListEntryKind::DenyRegex(regex))
         }
         EntryKind::AllowA | EntryKind::AllowAAAA => {
-            if entry.data.parse::<IpAddr>().is_err() {
-                return (StatusCode::BAD_REQUEST, "Invalid 'data' for the specified 'kind'").into_response();
-            }
+            let Some(domain) = entry.domain.clone() else {
+                return (StatusCode::BAD_REQUEST, "Missing 'domain' for a hosts entry").into_response();
+            };
+            let ip = match entry.data.parse::<IpAddr>() {
+                Ok(ip) => ip,
+                Err(_) => {
+                    return (StatusCode::BAD_REQUEST, "Invalid 'data' for the specified 'kind'").into_response();
+                }
+            };
+            DnsServerCommand::AddNewListEntry(ListEntryKind::Hosts((domain, ip)))
         }
-    }
+    };
 
     if let Err(e) = async move {
         let mut connection = state.db.get_connection().await?;
+
+        let _ = state.command_tx.send(cmd).await;
 
         let entry = ListEntry::new(entry.domain, kind, entry.data)?;
         entry.insert_into(&mut connection).await?;
@@ -59,7 +78,7 @@ pub async fn add_new_list_entry(State(state): State<Arc<ApiState>>, Json(entry):
     }
     .await
     {
-        tracing::debug!("Error while adding a new list entry: {}", e);
+        tracing::debug!("Error while adding a new list entry: {:#}", e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 

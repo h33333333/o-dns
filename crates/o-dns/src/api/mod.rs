@@ -3,23 +3,26 @@ mod routes;
 mod util;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use anyhow::Context;
 use axum::Router;
 use routes::get_router;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc::Sender;
 
 use crate::db::SqliteDb;
-use crate::State;
+use crate::server::DnsServerCommand;
 
 pub struct ApiServer {
     router: Router,
 }
 
 impl ApiServer {
-    pub fn new(db: SqliteDb, resolver_state: State) -> Self {
-        let state = ApiState { db, resolver_state };
+    pub fn new(db: SqliteDb, dns_server_command_tx: Sender<DnsServerCommand>) -> Self {
+        let state = ApiState {
+            db,
+            command_tx: dns_server_command_tx,
+        };
         let router = get_router(state);
 
         ApiServer { router }
@@ -38,5 +41,5 @@ impl ApiServer {
 
 struct ApiState {
     db: SqliteDb,
-    resolver_state: State,
+    command_tx: Sender<DnsServerCommand>,
 }

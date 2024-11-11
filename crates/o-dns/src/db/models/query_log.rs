@@ -53,14 +53,12 @@ impl QueryLog {
 
 impl Model for QueryLog {
     const NAME: &str = "LogEntry";
-    const TABLE: &str = "query_log";
 
     async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
         sqlx::query(
-            "INSERT INTO ?1 (timestamp, domain, qtype, client, response_code, response_delay_ms, source)
-            VALUES (?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO query_log (timestamp, domain, qtype, client, response_code, response_delay_ms, source)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
-        .bind(Self::TABLE)
         .bind(self.timestamp)
         .bind(&self.domain)
         .bind(self.qtype)

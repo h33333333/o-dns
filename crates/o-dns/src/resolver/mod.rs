@@ -1,6 +1,6 @@
 mod upstream;
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -13,7 +13,8 @@ use tokio::time::Instant;
 use upstream::resolve_with_upstream;
 
 use crate::db::QueryLog;
-use crate::util::get_response_dns_packet;
+use crate::server::{DnsServerCommand, ListEntryKind};
+use crate::util::{get_response_dns_packet, hash_to_u128};
 use crate::{Connection, State, DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE};
 
 #[derive(Debug, Clone, Copy)]
@@ -261,6 +262,31 @@ impl Resolver {
         // AD bit
         if upstream_response.header.z[1] {
             response_packet.header.z[1] = true;
+        }
+
+        Ok(())
+    }
+
+    pub async fn process_command(&self, command: DnsServerCommand) -> anyhow::Result<()> {
+        match command {
+            DnsServerCommand::AddNewListEntry(kind) => match kind {
+                ListEntryKind::DenyRegex(regex) => self.state.denylist.write().await.add_regex(regex),
+                ListEntryKind::DenyDomain(domain) => {
+                    self.state.denylist.write().await.add_entry(hash_to_u128(domain, None))
+                }
+                ListEntryKind::Hosts((domain, ip_addr)) => {
+                    let rdata = match ip_addr {
+                        IpAddr::V4(address) => ResourceData::A { address },
+                        IpAddr::V6(address) => ResourceData::AAAA { address },
+                    };
+                    self.state
+                        .hosts
+                        .write()
+                        .await
+                        .add_entry(hash_to_u128(domain.as_bytes(), None), rdata)
+                        .context("error while adding an entry to the hosts file")?
+                }
+            },
         }
 
         Ok(())

@@ -1,11 +1,12 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use o_dns_lib::{ByteBuf, DnsPacket, FromBuf as _};
+use regex::Regex;
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{Receiver, UnboundedSender};
 use tokio::task::JoinSet;
 use tracing::Instrument;
 
@@ -14,8 +15,16 @@ use crate::{Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 
 type HandlerResult = anyhow::Result<()>;
 
-pub enum Command {
-    AddNewListEntry,
+#[derive(Debug)]
+pub enum ListEntryKind {
+    DenyRegex(Regex),
+    DenyDomain(String),
+    Hosts((String, IpAddr)),
+}
+
+#[derive(Debug)]
+pub enum DnsServerCommand {
+    AddNewListEntry(ListEntryKind),
 }
 
 pub struct DnsServer {
@@ -23,6 +32,7 @@ pub struct DnsServer {
     tcp_listener: Arc<TcpListener>,
     resolver: Arc<Resolver>,
     workers: JoinSet<HandlerResult>,
+    command_rx: Receiver<DnsServerCommand>,
 }
 
 impl DnsServer {
@@ -32,6 +42,7 @@ impl DnsServer {
         denylist_path: Option<&Path>,
         allowlist_path: Option<&Path>,
         log_tx: UnboundedSender<QueryLog>,
+        command_rx: Receiver<DnsServerCommand>,
     ) -> anyhow::Result<Self> {
         let udp_socket = Arc::new(
             UdpSocket::bind(listen_on)
@@ -56,6 +67,7 @@ impl DnsServer {
             tcp_listener,
             resolver,
             workers: JoinSet::new(),
+            command_rx,
         })
     }
 
@@ -66,8 +78,17 @@ impl DnsServer {
         allowlist_path: Option<&Path>,
         log_tx: UnboundedSender<QueryLog>,
         max_parallel_connections: u8,
+        command_rx: Receiver<DnsServerCommand>,
     ) -> anyhow::Result<Self> {
-        let mut server = DnsServer::new(listen_on, resolver_addr, denylist_path, allowlist_path, log_tx).await?;
+        let mut server = DnsServer::new(
+            listen_on,
+            resolver_addr,
+            denylist_path,
+            allowlist_path,
+            log_tx,
+            command_rx,
+        )
+        .await?;
         server.add_workers(max_parallel_connections).await;
 
         Ok(server)
@@ -87,10 +108,24 @@ impl DnsServer {
     }
 
     pub async fn block_until_completion(mut self) -> anyhow::Result<()> {
-        while let Some(result) = self.workers.join_next().await {
-            if let Err(e) = result.context("worker task failed to execute")? {
-                tracing::debug!("Error in a worker: {}", e);
-            }
+        loop {
+            tokio::select! {
+                Some(result) = self.workers.join_next() => {
+                    if let Err(e) = result.context("worker task failed to execute")? {
+                        tracing::debug!("Error in a worker: {}", e);
+                    }
+                    if self.workers.is_empty() {
+                        break;
+                    }
+                    continue;
+                }
+                Some(cmd) = self.command_rx.recv() => {
+                    tracing::debug!(cmd = ?cmd, "DNS server received a new command");
+                    if let Err(e) = self.resolver.process_command(cmd).await {
+                        tracing::debug!("Error while processing a DNS server command: {:#}", e);
+                    }
+                }
+            };
         }
 
         Ok(())

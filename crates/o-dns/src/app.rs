@@ -35,6 +35,8 @@ impl App {
             .await
             .context("error while creating a query logger")?;
 
+        // I doubt there will ever be more than 5 commands sitting in this queue at once
+        let (command_tx, command_rx) = tokio::sync::mpsc::channel(5);
         let server = DnsServer::new_with_workers(
             dns_bind_addr,
             upstream_resolver_addr,
@@ -42,6 +44,7 @@ impl App {
             args.allowlist_path.as_deref(),
             log_tx,
             args.max_parallel_connections,
+            command_rx,
         )
         .await
         .context("failed to instantiate the DNS server")?;
@@ -51,7 +54,7 @@ impl App {
         tasks.spawn(query_logger.watch_for_logs());
         if !args.disable_api_server {
             let api_server_bind_addr = SocketAddr::new(args.host, args.api_server_port);
-            let api_server = ApiServer::new(sqlite_db);
+            let api_server = ApiServer::new(sqlite_db, command_tx);
             tasks.spawn(api_server.serve(api_server_bind_addr));
         }
 
