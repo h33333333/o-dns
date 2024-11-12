@@ -37,6 +37,15 @@ pub struct ListEntry {
     pub data: String,
 }
 
+impl ListEntry {
+    pub async fn select_all(connection: &mut SqliteConnection) -> anyhow::Result<Vec<ListEntry>> {
+        sqlx::query_as("SELECT * FROM allow_deny_list")
+            .fetch_all(connection)
+            .await
+            .context("failed to select all dynamic allow/deny list entries")
+    }
+}
+
 impl<'r> FromRow<'r, SqliteRow> for ListEntry {
     fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
         let id = row.try_get("id")?;

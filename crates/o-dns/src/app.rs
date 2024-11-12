@@ -1,13 +1,17 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use anyhow::Context as _;
 use clap::Parser as _;
+use regex::Regex;
+use sqlx::SqliteConnection;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinSet;
 
 use crate::api::ApiServer;
-use crate::db::SqliteDb;
+use crate::db::{EntryKind, ListEntry, SqliteDb};
+use crate::hosts::ListEntryKind;
 use crate::query_logger::QueryLogger;
+use crate::server::DnsServerCommand;
 use crate::{Args, DnsServer};
 
 pub struct App;
@@ -49,6 +53,14 @@ impl App {
         .await
         .context("failed to instantiate the DNS server")?;
 
+        // Fill hosts and denylist with additional data from DB
+        let mut connection = sqlite_db.get_connection().await?;
+        for entry in App::get_dynamic_list_entries(&mut connection).await? {
+            if let Err(e) = server.process_command(DnsServerCommand::AddNewListEntry(entry)).await {
+                tracing::debug!("Failed to add a list entry: {:#}", e);
+            }
+        }
+
         let mut tasks = JoinSet::new();
         tasks.spawn(server.block_until_completion());
         tasks.spawn(query_logger.watch_for_logs());
@@ -65,5 +77,21 @@ impl App {
         }
 
         Ok(())
+    }
+
+    async fn get_dynamic_list_entries(
+        connection: &mut SqliteConnection,
+    ) -> anyhow::Result<impl Iterator<Item = ListEntryKind>> {
+        let dynamic_entries = ListEntry::select_all(connection).await?;
+
+        Ok(dynamic_entries.into_iter().filter_map(|entry| {
+            Some(match entry.kind {
+                EntryKind::Deny => ListEntryKind::DenyDomain(entry.domain?),
+                EntryKind::DenyRegex => ListEntryKind::DenyRegex(Regex::new(&entry.data).ok()?),
+                EntryKind::AllowA | EntryKind::AllowAAAA => {
+                    ListEntryKind::Hosts((entry.domain?, entry.data.parse::<IpAddr>().ok()?))
+                }
+            })
+        }))
     }
 }

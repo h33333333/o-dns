@@ -1,26 +1,20 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use o_dns_lib::{ByteBuf, DnsPacket, FromBuf as _};
-use regex::Regex;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc::{Receiver, UnboundedSender};
 use tokio::task::JoinSet;
 use tracing::Instrument;
 
 use crate::db::QueryLog;
+use crate::hosts::ListEntryKind;
+use crate::util::{parse_denylist_file, parse_hosts_file};
 use crate::{Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 
 type HandlerResult = anyhow::Result<()>;
-
-#[derive(Debug)]
-pub enum ListEntryKind {
-    DenyRegex(Regex),
-    DenyDomain(String),
-    Hosts((String, IpAddr)),
-}
 
 #[derive(Debug)]
 pub enum DnsServerCommand {
@@ -56,9 +50,23 @@ impl DnsServer {
                 .context("error while creating a TcpListener")?,
         );
 
-        let state = State::new(denylist_path, allowlist_path, resolver_addr)
+        let state = State::new(resolver_addr)
             .await
             .context("failed to instantiate a shared state")?;
+
+        // Populate the denylist
+        if let Some(path) = denylist_path {
+            parse_denylist_file(path, &mut *state.denylist.write().await)
+                .await
+                .context("error while parsing the denylist file")?;
+        }
+
+        // Populate the hosts file
+        if let Some(path) = allowlist_path {
+            parse_hosts_file(path, &mut *state.hosts.write().await)
+                .await
+                .context("error while parsing the hosts file")?;
+        }
 
         let resolver = Arc::new(Resolver::new(state, log_tx));
 
@@ -121,11 +129,23 @@ impl DnsServer {
                 }
                 Some(cmd) = self.command_rx.recv() => {
                     tracing::debug!(cmd = ?cmd, "DNS server received a new command");
-                    if let Err(e) = self.resolver.process_command(cmd).await {
+                    if let Err(e) = self.process_command(cmd).await {
                         tracing::debug!("Error while processing a DNS server command: {:#}", e);
                     }
                 }
             };
+        }
+
+        Ok(())
+    }
+
+    pub async fn process_command(&self, command: DnsServerCommand) -> anyhow::Result<()> {
+        match command {
+            DnsServerCommand::AddNewListEntry(list_entry) => self
+                .resolver
+                .add_list_entry(list_entry)
+                .await
+                .context("failed to add a new list entry")?,
         }
 
         Ok(())

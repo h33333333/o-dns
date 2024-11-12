@@ -12,7 +12,8 @@ use serde::Deserialize;
 use super::util::build_select_query_with_filters;
 use super::ApiState;
 use crate::db::{EntryKind, ListEntry, Model as _, QueryLog, SqliteDb};
-use crate::server::{DnsServerCommand, ListEntryKind};
+use crate::hosts::ListEntryKind;
+use crate::server::DnsServerCommand;
 
 pub async fn health_check(State(_): State<Arc<ApiState>>) -> &'static str {
     "I'm alive"
