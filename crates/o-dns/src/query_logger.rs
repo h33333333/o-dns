@@ -59,7 +59,7 @@ impl QueryLogger {
                 .context("error while inserting collected logs into the DB")?;
 
             tracing::trace!(
-                "Stored {} query logs to SQLite in {:.3} seconds",
+                "Stored {} query log(s) to SQLite in {:.3} second(s)",
                 logs.len(),
                 start.elapsed().as_secs_f64()
             );
