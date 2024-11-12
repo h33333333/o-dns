@@ -1,13 +1,17 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use anyhow::Context as _;
 use clap::Parser as _;
+use regex::Regex;
+use sqlx::SqliteConnection;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinSet;
 
 use crate::api::ApiServer;
-use crate::db::get_sqlite_connection_pool;
+use crate::db::{EntryKind, ListEntry, SqliteDb};
+use crate::hosts::ListEntryKind;
 use crate::query_logger::QueryLogger;
+use crate::server::DnsServerCommand;
 use crate::{Args, DnsServer};
 
 pub struct App;
@@ -22,14 +26,21 @@ impl App {
         // Channel for query logs
         let (log_tx, log_rx) = unbounded_channel();
 
-        let connection_pool = get_sqlite_connection_pool(&args.query_log_path)
+        let sqlite_db = SqliteDb::new(&args.query_log_path)
             .await
-            .context("failed to create an SQLite connection pool")?;
+            .context("failed to establish an SQLite DB connection")?;
 
-        let query_logger = QueryLogger::new(log_rx, connection_pool.clone())
+        sqlite_db
+            .init_tables()
+            .await
+            .context("failed to initialize DB tables")?;
+
+        let query_logger = QueryLogger::new(log_rx, sqlite_db.clone())
             .await
             .context("error while creating a query logger")?;
 
+        // I doubt there will ever be more than 5 commands sitting in this queue at once
+        let (command_tx, command_rx) = tokio::sync::mpsc::channel(5);
         let server = DnsServer::new_with_workers(
             dns_bind_addr,
             upstream_resolver_addr,
@@ -37,16 +48,25 @@ impl App {
             args.allowlist_path.as_deref(),
             log_tx,
             args.max_parallel_connections,
+            command_rx,
         )
         .await
         .context("failed to instantiate the DNS server")?;
+
+        // Fill hosts and denylist with additional data from DB
+        let mut connection = sqlite_db.get_connection().await?;
+        for entry in App::get_dynamic_list_entries(&mut connection).await? {
+            if let Err(e) = server.process_command(DnsServerCommand::AddNewListEntry(entry)).await {
+                tracing::debug!("Failed to add a list entry: {:#}", e);
+            }
+        }
 
         let mut tasks = JoinSet::new();
         tasks.spawn(server.block_until_completion());
         tasks.spawn(query_logger.watch_for_logs());
         if !args.disable_api_server {
             let api_server_bind_addr = SocketAddr::new(args.host, args.api_server_port);
-            let api_server = ApiServer::new(connection_pool);
+            let api_server = ApiServer::new(sqlite_db, command_tx);
             tasks.spawn(api_server.serve(api_server_bind_addr));
         }
 
@@ -57,5 +77,21 @@ impl App {
         }
 
         Ok(())
+    }
+
+    async fn get_dynamic_list_entries(
+        connection: &mut SqliteConnection,
+    ) -> anyhow::Result<impl Iterator<Item = ListEntryKind>> {
+        let dynamic_entries = ListEntry::select_all(connection).await?;
+
+        Ok(dynamic_entries.into_iter().filter_map(|entry| {
+            Some(match entry.kind {
+                EntryKind::Deny => ListEntryKind::DenyDomain(entry.domain?),
+                EntryKind::DenyRegex => ListEntryKind::DenyRegex(Regex::new(&entry.data).ok()?),
+                EntryKind::AllowA | EntryKind::AllowAAAA => {
+                    ListEntryKind::Hosts((entry.domain?, entry.data.parse::<IpAddr>().ok()?))
+                }
+            })
+        }))
     }
 }

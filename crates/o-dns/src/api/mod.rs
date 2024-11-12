@@ -7,16 +7,22 @@ use std::net::SocketAddr;
 use anyhow::Context;
 use axum::Router;
 use routes::get_router;
-use sqlx::SqlitePool;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc::Sender;
+
+use crate::db::SqliteDb;
+use crate::server::DnsServerCommand;
 
 pub struct ApiServer {
     router: Router,
 }
 
 impl ApiServer {
-    pub fn new(connection_pool: SqlitePool) -> Self {
-        let state = ApiState { connection_pool };
+    pub fn new(db: SqliteDb, dns_server_command_tx: Sender<DnsServerCommand>) -> Self {
+        let state = ApiState {
+            db,
+            command_tx: dns_server_command_tx,
+        };
         let router = get_router(state);
 
         ApiServer { router }
@@ -33,7 +39,7 @@ impl ApiServer {
     }
 }
 
-#[derive(Clone)]
 struct ApiState {
-    connection_pool: SqlitePool,
+    db: SqliteDb,
+    command_tx: Sender<DnsServerCommand>,
 }

@@ -1,9 +1,17 @@
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 
 use o_dns_lib::{QueryType, ResourceData};
 use regex::Regex;
 
 use crate::util::hash_to_u128;
+
+#[derive(Debug)]
+pub enum ListEntryKind {
+    DenyRegex(Regex),
+    DenyDomain(String),
+    Hosts((String, IpAddr)),
+}
 
 #[derive(Default)]
 pub struct Hosts {

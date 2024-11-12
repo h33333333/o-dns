@@ -5,20 +5,28 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use o_dns_lib::{ByteBuf, DnsPacket, FromBuf as _};
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{Receiver, UnboundedSender};
 use tokio::task::JoinSet;
 use tracing::Instrument;
 
-use crate::query_logger::LogEntry;
+use crate::db::QueryLog;
+use crate::hosts::ListEntryKind;
+use crate::util::{parse_denylist_file, parse_hosts_file};
 use crate::{Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 
 type HandlerResult = anyhow::Result<()>;
+
+#[derive(Debug)]
+pub enum DnsServerCommand {
+    AddNewListEntry(ListEntryKind),
+}
 
 pub struct DnsServer {
     udp_socket: Arc<UdpSocket>,
     tcp_listener: Arc<TcpListener>,
     resolver: Arc<Resolver>,
     workers: JoinSet<HandlerResult>,
+    command_rx: Receiver<DnsServerCommand>,
 }
 
 impl DnsServer {
@@ -27,7 +35,8 @@ impl DnsServer {
         resolver_addr: SocketAddr,
         denylist_path: Option<&Path>,
         allowlist_path: Option<&Path>,
-        log_tx: UnboundedSender<LogEntry>,
+        log_tx: UnboundedSender<QueryLog>,
+        command_rx: Receiver<DnsServerCommand>,
     ) -> anyhow::Result<Self> {
         let udp_socket = Arc::new(
             UdpSocket::bind(listen_on)
@@ -41,9 +50,23 @@ impl DnsServer {
                 .context("error while creating a TcpListener")?,
         );
 
-        let state = State::new(denylist_path, allowlist_path, resolver_addr)
+        let state = State::new(resolver_addr)
             .await
             .context("failed to instantiate a shared state")?;
+
+        // Populate the denylist
+        if let Some(path) = denylist_path {
+            parse_denylist_file(path, &mut *state.denylist.write().await)
+                .await
+                .context("error while parsing the denylist file")?;
+        }
+
+        // Populate the hosts file
+        if let Some(path) = allowlist_path {
+            parse_hosts_file(path, &mut *state.hosts.write().await)
+                .await
+                .context("error while parsing the hosts file")?;
+        }
 
         let resolver = Arc::new(Resolver::new(state, log_tx));
 
@@ -52,6 +75,7 @@ impl DnsServer {
             tcp_listener,
             resolver,
             workers: JoinSet::new(),
+            command_rx,
         })
     }
 
@@ -60,10 +84,19 @@ impl DnsServer {
         resolver_addr: SocketAddr,
         denylist_path: Option<&Path>,
         allowlist_path: Option<&Path>,
-        log_tx: UnboundedSender<LogEntry>,
+        log_tx: UnboundedSender<QueryLog>,
         max_parallel_connections: u8,
+        command_rx: Receiver<DnsServerCommand>,
     ) -> anyhow::Result<Self> {
-        let mut server = DnsServer::new(listen_on, resolver_addr, denylist_path, allowlist_path, log_tx).await?;
+        let mut server = DnsServer::new(
+            listen_on,
+            resolver_addr,
+            denylist_path,
+            allowlist_path,
+            log_tx,
+            command_rx,
+        )
+        .await?;
         server.add_workers(max_parallel_connections).await;
 
         Ok(server)
@@ -83,10 +116,36 @@ impl DnsServer {
     }
 
     pub async fn block_until_completion(mut self) -> anyhow::Result<()> {
-        while let Some(result) = self.workers.join_next().await {
-            if let Err(e) = result.context("worker task failed to execute")? {
-                tracing::debug!("Error in a worker: {}", e);
-            }
+        loop {
+            tokio::select! {
+                Some(result) = self.workers.join_next() => {
+                    if let Err(e) = result.context("worker task failed to execute")? {
+                        tracing::debug!("Error in a worker: {}", e);
+                    }
+                    if self.workers.is_empty() {
+                        break;
+                    }
+                    continue;
+                }
+                Some(cmd) = self.command_rx.recv() => {
+                    tracing::debug!(cmd = ?cmd, "DNS server received a new command");
+                    if let Err(e) = self.process_command(cmd).await {
+                        tracing::debug!("Error while processing a DNS server command: {:#}", e);
+                    }
+                }
+            };
+        }
+
+        Ok(())
+    }
+
+    pub async fn process_command(&self, command: DnsServerCommand) -> anyhow::Result<()> {
+        match command {
+            DnsServerCommand::AddNewListEntry(list_entry) => self
+                .resolver
+                .add_list_entry(list_entry)
+                .await
+                .context("failed to add a new list entry")?,
         }
 
         Ok(())

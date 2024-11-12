@@ -19,12 +19,9 @@ mod query_logger;
 mod util;
 
 use std::net::SocketAddr;
-use std::path::Path;
 
-use anyhow::Context as _;
 use cache::Cache;
 use tokio::sync::RwLock;
-use util::{parse_denylist_file, parse_hosts_file};
 
 /// Recommended eDNS buf size
 pub const DEFAULT_EDNS_BUF_CAPACITY: usize = 1232;
@@ -41,32 +38,11 @@ pub struct State {
 }
 
 impl State {
-    pub async fn new(
-        denylist_path: Option<&Path>,
-        allowlist_path: Option<&Path>,
-        upstream_resolver: SocketAddr,
-    ) -> anyhow::Result<Self> {
-        let mut denylist = Default::default();
-        let mut allowlist = Default::default();
-
-        // Populate the denylist
-        if let Some(path) = denylist_path {
-            parse_denylist_file(path, &mut denylist)
-                .await
-                .context("error while parsing the denylist file")?;
-        }
-
-        // Populate the hosts file
-        if let Some(path) = allowlist_path {
-            parse_hosts_file(path, &mut allowlist)
-                .await
-                .context("error while parsing the hosts file")?;
-        }
-
+    pub async fn new(upstream_resolver: SocketAddr) -> anyhow::Result<Self> {
         Ok(State {
             upstream_resolver,
-            denylist: RwLock::new(denylist),
-            hosts: RwLock::new(allowlist),
+            denylist: Default::default(),
+            hosts: Default::default(),
             cache: Default::default(),
         })
     }

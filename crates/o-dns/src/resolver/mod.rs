@@ -1,6 +1,6 @@
 mod upstream;
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -12,8 +12,9 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
 use upstream::resolve_with_upstream;
 
-use crate::query_logger::LogEntry;
-use crate::util::get_response_dns_packet;
+use crate::db::QueryLog;
+use crate::hosts::ListEntryKind;
+use crate::util::{get_response_dns_packet, hash_to_u128};
 use crate::{Connection, State, DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE};
 
 #[derive(Debug, Clone, Copy)]
@@ -27,11 +28,10 @@ pub enum ResponseSource {
 
 pub struct Resolver {
     state: Arc<State>,
-    log_tx: UnboundedSender<LogEntry>,
+    log_tx: UnboundedSender<QueryLog>,
 }
-
 impl Resolver {
-    pub fn new(state: State, log_tx: UnboundedSender<LogEntry>) -> Self {
+    pub fn new(state: State, log_tx: UnboundedSender<QueryLog>) -> Self {
         Resolver {
             state: Arc::new(state),
             log_tx,
@@ -152,7 +152,7 @@ impl Resolver {
             tracing::error!("Error while sending a DNS response: {:#}", e)
         };
 
-        let log_entry = match LogEntry::new_from_response(
+        let log_entry = match QueryLog::new_from_response(
             &response_packet,
             connection.get_client_addr().ok(),
             start.elapsed().as_millis() as u32,
@@ -261,6 +261,29 @@ impl Resolver {
         // AD bit
         if upstream_response.header.z[1] {
             response_packet.header.z[1] = true;
+        }
+
+        Ok(())
+    }
+
+    pub async fn add_list_entry(&self, entry: ListEntryKind) -> anyhow::Result<()> {
+        match entry {
+            ListEntryKind::DenyDomain(domain) => {
+                self.state.denylist.write().await.add_entry(hash_to_u128(domain, None))
+            }
+            ListEntryKind::DenyRegex(regex) => self.state.denylist.write().await.add_regex(regex),
+            ListEntryKind::Hosts((domain, ip_addr)) => {
+                let rdata = match ip_addr {
+                    IpAddr::V4(address) => ResourceData::A { address },
+                    IpAddr::V6(address) => ResourceData::AAAA { address },
+                };
+                self.state
+                    .hosts
+                    .write()
+                    .await
+                    .add_entry(hash_to_u128(domain.as_bytes(), None), rdata)
+                    .context("error while adding an entry to the hosts file")?
+            }
         }
 
         Ok(())
