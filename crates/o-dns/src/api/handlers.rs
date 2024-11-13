@@ -9,7 +9,7 @@ use axum::Json;
 use regex::Regex;
 use serde::Deserialize;
 
-use super::util::build_select_query_with_filters;
+use super::util::{build_delete_list_entry_query, build_select_logs_query_with_filters};
 use super::ApiState;
 use crate::db::{EntryKind, ListEntry, Model as _, QueryLog, SqliteDb};
 use crate::hosts::ListEntryKind;
@@ -116,7 +116,7 @@ pub async fn get_query_logs(State(state): State<Arc<ApiState>>, Query(filter): Q
 }
 
 async fn get_latest_logs_handler(db: &SqliteDb, filter: &LatestLogsFilter) -> anyhow::Result<Vec<QueryLog>> {
-    let mut query = build_select_query_with_filters(filter);
+    let mut query = build_select_logs_query_with_filters(filter);
 
     let mut connection = db.get_connection().await?;
 
@@ -127,4 +127,38 @@ async fn get_latest_logs_handler(db: &SqliteDb, filter: &LatestLogsFilter) -> an
         .context("failed to get data from DB")?;
 
     Ok(logs)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteListEntryParams {
+    pub id: u32,
+}
+
+pub async fn delete_list_entry(
+    State(state): State<Arc<ApiState>>,
+    Query(params): Query<DeleteListEntryParams>,
+) -> Response {
+    match delete_list_entry_handler(&state.db, params.id).await {
+        Ok(()) => (),
+        Err(e) => {
+            tracing::debug!(filter = ?params, "Error while deleting a list entry: {:#}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    StatusCode::OK.into_response()
+}
+
+async fn delete_list_entry_handler(db: &SqliteDb, id: u32) -> anyhow::Result<()> {
+    let mut query = build_delete_list_entry_query(id);
+
+    let mut connection = db.get_connection().await?;
+
+    let _deleted_entry: Option<ListEntry> = query
+        .build_query_as()
+        .fetch_optional(&mut *connection)
+        .await
+        .context("failed to delete the list entry")?;
+
+    Ok(())
 }
