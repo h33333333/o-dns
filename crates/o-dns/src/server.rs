@@ -1,5 +1,4 @@
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -11,7 +10,6 @@ use tracing::Instrument;
 
 use crate::db::QueryLog;
 use crate::hosts::ListEntryKind;
-use crate::util::{parse_denylist_file, parse_hosts_file};
 use crate::{Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 
 type HandlerResult = anyhow::Result<()>;
@@ -33,8 +31,6 @@ impl DnsServer {
     pub async fn new(
         listen_on: SocketAddr,
         resolver_addr: SocketAddr,
-        denylist_path: Option<&Path>,
-        allowlist_path: Option<&Path>,
         log_tx: UnboundedSender<QueryLog>,
         command_rx: Receiver<DnsServerCommand>,
     ) -> anyhow::Result<Self> {
@@ -54,20 +50,6 @@ impl DnsServer {
             .await
             .context("failed to instantiate a shared state")?;
 
-        // Populate the denylist
-        if let Some(path) = denylist_path {
-            parse_denylist_file(path, &mut *state.denylist.write().await)
-                .await
-                .context("error while parsing the denylist file")?;
-        }
-
-        // Populate the hosts file
-        if let Some(path) = allowlist_path {
-            parse_hosts_file(path, &mut *state.hosts.write().await)
-                .await
-                .context("error while parsing the hosts file")?;
-        }
-
         let resolver = Arc::new(Resolver::new(state, log_tx));
 
         Ok(DnsServer {
@@ -82,21 +64,11 @@ impl DnsServer {
     pub async fn new_with_workers(
         listen_on: SocketAddr,
         resolver_addr: SocketAddr,
-        denylist_path: Option<&Path>,
-        allowlist_path: Option<&Path>,
         log_tx: UnboundedSender<QueryLog>,
         max_parallel_connections: u8,
         command_rx: Receiver<DnsServerCommand>,
     ) -> anyhow::Result<Self> {
-        let mut server = DnsServer::new(
-            listen_on,
-            resolver_addr,
-            denylist_path,
-            allowlist_path,
-            log_tx,
-            command_rx,
-        )
-        .await?;
+        let mut server = DnsServer::new(listen_on, resolver_addr, log_tx, command_rx).await?;
         server.add_workers(max_parallel_connections).await;
 
         Ok(server)

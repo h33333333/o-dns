@@ -23,7 +23,8 @@ pub async fn health_check(State(_): State<Arc<ApiState>>) -> &'static str {
 pub struct ListEntryBody {
     pub kind: u8,
     pub domain: Option<String>,
-    pub data: String,
+    pub data: Option<String>,
+    pub label: Option<String>,
 }
 
 #[axum::debug_handler]
@@ -45,7 +46,10 @@ pub async fn add_new_list_entry(State(state): State<Arc<ApiState>>, Json(entry):
             DnsServerCommand::AddNewListEntry(ListEntryKind::DenyDomain(domain))
         }
         EntryKind::DenyRegex => {
-            let regex = match Regex::new(&entry.data) {
+            let Some(regex) = entry.data.as_ref() else {
+                return (StatusCode::BAD_REQUEST, "Missing 'data' for a deny entry with regex").into_response();
+            };
+            let regex = match Regex::new(regex) {
                 Ok(regex) => regex,
                 Err(e) => {
                     return (StatusCode::BAD_REQUEST, format!("Invalid regex: {:#}", e)).into_response();
@@ -57,7 +61,10 @@ pub async fn add_new_list_entry(State(state): State<Arc<ApiState>>, Json(entry):
             let Some(domain) = entry.domain.clone() else {
                 return (StatusCode::BAD_REQUEST, "Missing 'domain' for a hosts entry").into_response();
             };
-            let ip = match entry.data.parse::<IpAddr>() {
+            let Some(ip) = entry.data.as_ref() else {
+                return (StatusCode::BAD_REQUEST, "Missing 'data' for an allow entry").into_response();
+            };
+            let ip = match ip.parse::<IpAddr>() {
                 Ok(ip) => ip,
                 Err(_) => {
                     return (StatusCode::BAD_REQUEST, "Invalid 'data' for the specified 'kind'").into_response();
@@ -72,7 +79,12 @@ pub async fn add_new_list_entry(State(state): State<Arc<ApiState>>, Json(entry):
 
         let _ = state.command_tx.send(cmd).await;
 
-        let entry = ListEntry::new(entry.domain, kind, entry.data)?;
+        let entry = ListEntry::new(
+            entry.domain.map(Into::into),
+            kind,
+            entry.data.map(Into::into),
+            entry.label.map(Into::into),
+        )?;
         entry.insert_into(&mut connection).await?;
 
         Ok::<(), anyhow::Error>(())

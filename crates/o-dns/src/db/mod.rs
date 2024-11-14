@@ -58,7 +58,8 @@ impl SqliteDb {
                 timestamp INTEGER NOT NULL,
                 domain TEXT,
                 kind INTEGER NOT NULL,
-                data TEXT NOT NULL
+                data TEXT,
+                label TEXT
             )",
         )
         .execute(&self.connection_pool)

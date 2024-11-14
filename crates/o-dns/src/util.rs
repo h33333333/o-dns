@@ -1,71 +1,77 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::ops::Deref;
 use std::path::Path;
 
 use anyhow::Context;
 use o_dns_lib::{DnsPacket, QueryType, Question, ResourceData, ResourceRecord, ResponseCode};
 use regex::Regex;
 use sha1::Digest;
+use sqlx::SqliteConnection;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+use crate::db::{EntryKind, ListEntry, Model};
 use crate::{Denylist, Hosts, DEFAULT_EDNS_BUF_CAPACITY, EDNS_DO_BIT};
 
 trait EntryFromStr {
-    fn process_line(&mut self, line: &mut str) -> anyhow::Result<()>;
+    async fn process_line(line: &mut str, db: &mut SqliteConnection) -> anyhow::Result<()>;
 }
 
 impl EntryFromStr for Hosts {
-    fn process_line(&mut self, line: &mut str) -> anyhow::Result<()> {
+    async fn process_line(line: &mut str, db: &mut SqliteConnection) -> anyhow::Result<()> {
         let (domain, remaining_line) = parse_domain_name(line).context("failed to parse domain")?;
 
-        let (ip_addr, remaining_line) = {
+        let (raw_ip_addr, entry_kind, remaining_line) = {
             let mut it = remaining_line.splitn(2, ' ');
             let raw_ip_addr = it.next().context("missing IP address")?;
             let ip_addr: IpAddr = raw_ip_addr.parse().context("failed to parse IP address")?;
-            (ip_addr, it.next().unwrap_or(""))
+            let entry_kind = match ip_addr {
+                IpAddr::V4(_) => EntryKind::AllowA,
+                IpAddr::V6(_) => EntryKind::AllowAAAA,
+            };
+            (raw_ip_addr, entry_kind, it.next().unwrap_or(""))
         };
 
-        let rd = match ip_addr {
-            IpAddr::V4(address) => ResourceData::A { address },
-            IpAddr::V6(address) => ResourceData::AAAA { address },
-        };
+        let label = parse_label(remaining_line);
 
-        // TODO: store labels in the hosts for future use
-        let _label = parse_label(remaining_line);
+        let entry = ListEntry::new(
+            Some(domain.deref().into()),
+            entry_kind,
+            Some(raw_ip_addr.into()),
+            label.map(Into::into),
+        )
+        .context("failed to create a ListEntry")?;
 
-        // Can't happen as we only create A/AAAA records
-        self.add_entry(hash_to_u128(domain, None), rd)
-            .context("bug: non A/AAAA/CNAME record?")?;
+        entry.replace_into(db).await?;
 
         Ok(())
     }
 }
 
 impl EntryFromStr for Denylist {
-    fn process_line(&mut self, line: &mut str) -> anyhow::Result<()> {
-        let remaining_line = if line.starts_with('/') {
+    async fn process_line(line: &mut str, db: &mut SqliteConnection) -> anyhow::Result<()> {
+        let (domain, entry_kind, data, remaining_line) = if line.starts_with('/') {
             // Handle regex
             let (regex_str, remaining_line) = parse_regex(line).context("failed to parse regex")?;
 
-            let regex =
-                Regex::new(regex_str).map_err(|e| anyhow::anyhow!("failed to compile regex '{}': {}", regex_str, e))?;
+            // Check if regex is okay
+            Regex::new(regex_str).map_err(|e| anyhow::anyhow!("failed to compile regex '{}': {}", regex_str, e))?;
 
-            self.add_regex(regex);
-
-            remaining_line
+            (None, EntryKind::DenyRegex, Some((&*regex_str).into()), remaining_line)
         } else {
             // Handle domain
             let (domain, remaining_line) = parse_domain_name(line).context("failed to parse domain")?;
-
-            self.add_entry(hash_to_u128(domain, None));
-
-            remaining_line
+            (Some((&*domain).into()), EntryKind::Deny, None, remaining_line)
         };
 
-        // TODO: store labels in the denylist for future use
-        let _label = parse_label(remaining_line);
+        let label = parse_label(remaining_line);
+
+        let entry =
+            ListEntry::new(domain, entry_kind, data, label.map(Into::into)).context("failed to create a ListEntry")?;
+
+        entry.replace_into(db).await?;
 
         Ok(())
     }
@@ -147,19 +153,19 @@ pub fn hash_to_u128(data: impl AsRef<[u8]>, prefix: Option<&[u8]>) -> u128 {
     u128::from_be_bytes(hash[..16].try_into().unwrap())
 }
 
-pub async fn parse_hosts_file(path: &Path, whitelist: &mut Hosts) -> anyhow::Result<()> {
-    parse_list_file(path, whitelist)
+pub async fn parse_hosts_file(path: &Path, db: &mut SqliteConnection) -> anyhow::Result<()> {
+    parse_list_file::<Hosts>(path, db)
         .await
         .context("error while parsing the hosts file")
 }
 
-pub async fn parse_denylist_file(path: &Path, denylist: &mut Denylist) -> anyhow::Result<()> {
-    parse_list_file(path, denylist)
+pub async fn parse_denylist_file(path: &Path, db: &mut SqliteConnection) -> anyhow::Result<()> {
+    parse_list_file::<Denylist>(path, db)
         .await
         .context("error while parsing the denylist file")
 }
 
-async fn parse_list_file<T: EntryFromStr>(path: &Path, processor: &mut T) -> anyhow::Result<()> {
+async fn parse_list_file<T: EntryFromStr>(path: &Path, db: &mut SqliteConnection) -> anyhow::Result<()> {
     let mut file = BufReader::new(
         File::open(path)
             .await
@@ -186,7 +192,7 @@ async fn parse_list_file<T: EntryFromStr>(path: &Path, processor: &mut T) -> any
             continue;
         }
 
-        if let Err(e) = processor.process_line(remaining_line) {
+        if let Err(e) = T::process_line(remaining_line, db).await {
             tracing::debug!("Error while processing the line '{}': {}", remaining_line, e);
             continue;
         }

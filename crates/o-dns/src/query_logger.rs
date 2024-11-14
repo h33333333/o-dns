@@ -19,7 +19,7 @@ impl QueryLogger {
     }
 
     pub async fn watch_for_logs(mut self) -> anyhow::Result<()> {
-        // Try to write every 5 seconds if there are any logs in the queue
+        // Try to write every 5 seconds if there are logs in the queue
         let mut db_write_interval = interval(Duration::from_secs(5));
 
         let mut logs = Vec::with_capacity(DEFAULT_LOG_CHUNK);

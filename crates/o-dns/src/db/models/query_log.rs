@@ -71,4 +71,9 @@ impl Model for QueryLog {
         .context("error while inserting a log entry")
         .map(|result| result.rows_affected())
     }
+
+    async fn bind_and_replace(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
+        // No need to implement repalce logic for query logs, as these entries are additive
+        self.bind_and_insert(connection).await
+    }
 }

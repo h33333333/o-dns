@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context as _;
@@ -29,16 +30,17 @@ impl TryFrom<u8> for EntryKind {
 }
 
 #[derive(Debug, Serialize, Decode)]
-pub struct ListEntry {
+pub struct ListEntry<'a> {
     pub id: u32,
     pub timestamp: u32,
-    pub domain: Option<String>,
+    pub domain: Option<Cow<'a, str>>,
     pub kind: EntryKind,
-    pub data: String,
+    pub data: Option<Cow<'a, str>>,
+    pub label: Option<Cow<'a, str>>,
 }
 
-impl ListEntry {
-    pub async fn select_all(connection: &mut SqliteConnection) -> anyhow::Result<Vec<ListEntry>> {
+impl<'a> ListEntry<'a> {
+    pub async fn select_all(connection: &mut SqliteConnection) -> anyhow::Result<Vec<ListEntry<'static>>> {
         sqlx::query_as("SELECT * FROM allow_deny_list")
             .fetch_all(connection)
             .await
@@ -46,28 +48,35 @@ impl ListEntry {
     }
 }
 
-impl<'r> FromRow<'r, SqliteRow> for ListEntry {
-    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+impl<'r> FromRow<'r, SqliteRow> for ListEntry<'_> {
+    fn from_row(row: &'r SqliteRow) -> Result<ListEntry<'static>, sqlx::Error> {
         let id = row.try_get("id")?;
         let timestamp = row.try_get("timestamp")?;
-        let domain = row.try_get("domain")?;
+        let domain: Option<String> = row.try_get("domain")?;
         let kind_raw: u8 = row.try_get("kind")?;
-        let data = row.try_get("data")?;
+        let data: Option<String> = row.try_get("data")?;
+        let label: Option<String> = row.try_get("label")?;
 
         Ok(ListEntry {
             id,
             timestamp,
-            domain,
+            domain: domain.map(Into::into),
             kind: kind_raw
                 .try_into()
                 .map_err(|_| sqlx::Error::Decode(anyhow::anyhow!("Failed to convert 'kind' to an enum").into()))?,
-            data,
+            data: data.map(Into::into),
+            label: label.map(Into::into),
         })
     }
 }
 
-impl ListEntry {
-    pub fn new(domain: Option<String>, kind: EntryKind, data: String) -> anyhow::Result<Self> {
+impl<'a> ListEntry<'a> {
+    pub fn new(
+        domain: Option<Cow<'a, str>>,
+        kind: EntryKind,
+        data: Option<Cow<'a, str>>,
+        label: Option<Cow<'a, str>>,
+    ) -> anyhow::Result<ListEntry<'a>> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context("bug: misconfigured time on the system")?
@@ -79,25 +88,43 @@ impl ListEntry {
             domain,
             kind,
             data,
+            label,
         })
     }
 }
 
-impl Model for ListEntry {
-    const NAME: &str = "LogEntry";
+impl Model for ListEntry<'_> {
+    const NAME: &'static str = "LogEntry";
 
     async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
         sqlx::query(
-            "INSERT INTO allow_deny_list (timestamp, domain, kind, data)
-            VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO allow_deny_list (timestamp, domain, kind, data, label)
+            VALUES (?1, ?2, ?3, ?4, ?5)",
         )
         .bind(self.timestamp)
         .bind(&self.domain)
         .bind(self.kind as u8)
         .bind(&self.data)
+        .bind(&self.label)
         .execute(connection)
         .await
-        .context("error while inserting a log entry")
+        .context("error while inserting a list entry")
+        .map(|result| result.rows_affected())
+    }
+
+    async fn bind_and_replace(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
+        sqlx::query(
+            "REPLACE INTO allow_deny_list (id, timestamp, domain, kind, data, label)
+            VALUES ((SELECT id FROM allow_deny_list WHERE domain = ?2 AND kind = ?3 AND data = ?4), ?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(self.timestamp)
+        .bind(&self.domain)
+        .bind(self.kind as u8)
+        .bind(&self.data)
+        .bind(&self.label)
+        .execute(connection)
+        .await
+        .context("error while inserting a list entry")
         .map(|result| result.rows_affected())
     }
 }

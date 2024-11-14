@@ -12,6 +12,7 @@ use crate::db::{EntryKind, ListEntry, SqliteDb};
 use crate::hosts::ListEntryKind;
 use crate::query_logger::QueryLogger;
 use crate::server::DnsServerCommand;
+use crate::util::{parse_denylist_file, parse_hosts_file};
 use crate::{Args, DnsServer};
 
 pub struct App;
@@ -35,6 +36,22 @@ impl App {
             .await
             .context("failed to initialize DB tables")?;
 
+        // Feed deny and hosts files into the DB
+        let mut txn = sqlite_db.begin_transaction().await?;
+        if let Some(path) = args.denylist_path.as_ref() {
+            parse_denylist_file(path, &mut txn)
+                .await
+                .context("error while parsing the denylist file")?;
+        }
+        if let Some(path) = args.allowlist_path.as_ref() {
+            parse_hosts_file(path, &mut txn)
+                .await
+                .context("error while parsing the hosts file")?;
+        }
+        txn.commit()
+            .await
+            .context("failed to commit entries from denylist and hosts files")?;
+
         let query_logger = QueryLogger::new(log_rx, sqlite_db.clone())
             .await
             .context("error while creating a query logger")?;
@@ -44,8 +61,6 @@ impl App {
         let server = DnsServer::new_with_workers(
             dns_bind_addr,
             upstream_resolver_addr,
-            args.denylist_path.as_deref(),
-            args.allowlist_path.as_deref(),
             log_tx,
             args.max_parallel_connections,
             command_rx,
@@ -86,10 +101,10 @@ impl App {
 
         Ok(dynamic_entries.into_iter().filter_map(|entry| {
             Some(match entry.kind {
-                EntryKind::Deny => ListEntryKind::DenyDomain(entry.domain?),
-                EntryKind::DenyRegex => ListEntryKind::DenyRegex(Regex::new(&entry.data).ok()?),
+                EntryKind::Deny => ListEntryKind::DenyDomain(entry.domain?.into_owned()),
+                EntryKind::DenyRegex => ListEntryKind::DenyRegex(Regex::new(&entry.data?).ok()?),
                 EntryKind::AllowA | EntryKind::AllowAAAA => {
-                    ListEntryKind::Hosts((entry.domain?, entry.data.parse::<IpAddr>().ok()?))
+                    ListEntryKind::Hosts((entry.domain?.into_owned(), entry.data?.parse::<IpAddr>().ok()?))
                 }
             })
         }))
