@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context as _;
 use serde::Serialize;
-use sqlx::sqlite::SqliteRow;
+use sqlx::sqlite::{SqliteQueryResult, SqliteRow};
 use sqlx::{Decode, FromRow, Row, SqliteConnection};
 
 use super::Model;
@@ -96,7 +96,7 @@ impl<'a> ListEntry<'a> {
 impl Model for ListEntry<'_> {
     const NAME: &'static str = "LogEntry";
 
-    async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
+    async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<SqliteQueryResult> {
         sqlx::query(
             "INSERT INTO allow_deny_list (timestamp, domain, kind, data, label)
             VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -109,10 +109,9 @@ impl Model for ListEntry<'_> {
         .execute(connection)
         .await
         .context("error while inserting a list entry")
-        .map(|result| result.rows_affected())
     }
 
-    async fn bind_and_replace(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
+    async fn bind_and_replace(&self, connection: &mut SqliteConnection) -> anyhow::Result<SqliteQueryResult> {
         sqlx::query(
             "REPLACE INTO allow_deny_list (id, timestamp, domain, kind, data, label)
             VALUES ((SELECT id FROM allow_deny_list WHERE ((domain is NULL AND ?2 IS NULL) OR domain = ?2) AND kind = ?3 AND ((data is NULL AND ?4 IS NULL) OR data = ?4)), ?1, ?2, ?3, ?4, ?5)",
@@ -125,6 +124,5 @@ impl Model for ListEntry<'_> {
         .execute(connection)
         .await
         .context("error while inserting a list entry")
-        .map(|result| result.rows_affected())
     }
 }

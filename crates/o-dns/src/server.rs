@@ -17,6 +17,7 @@ type HandlerResult = anyhow::Result<()>;
 #[derive(Debug)]
 pub enum DnsServerCommand {
     AddNewListEntry(ListEntryKind),
+    RemoveListEntry(ListEntryKind),
 }
 
 pub struct DnsServer {
@@ -118,6 +119,7 @@ impl DnsServer {
                 .add_list_entry(list_entry)
                 .await
                 .context("failed to add a new list entry")?,
+            DnsServerCommand::RemoveListEntry(list_entry) => self.resolver.remove_list_entry(list_entry).await,
         }
 
         Ok(())

@@ -12,7 +12,7 @@ use crate::db::{EntryKind, ListEntry, SqliteDb};
 use crate::hosts::ListEntryKind;
 use crate::query_logger::QueryLogger;
 use crate::server::DnsServerCommand;
-use crate::util::{parse_denylist_file, parse_hosts_file};
+use crate::util::{hash_to_u128, parse_denylist_file, parse_hosts_file};
 use crate::{Args, DnsServer};
 
 pub struct App;
@@ -70,6 +70,7 @@ impl App {
 
         // Fill hosts and denylist with additional data from DB
         let mut connection = sqlite_db.get_connection().await?;
+        // TODO: it would be nice to this with one op and before wwe start serving the requests
         for entry in App::get_dynamic_list_entries(&mut connection).await? {
             if let Err(e) = server.process_command(DnsServerCommand::AddNewListEntry(entry)).await {
                 tracing::debug!("Failed to add a list entry: {:#}", e);
@@ -100,11 +101,12 @@ impl App {
         let dynamic_entries = ListEntry::select_all(connection).await?;
 
         Ok(dynamic_entries.into_iter().filter_map(|entry| {
+            let domain = entry.domain.map(|domain| hash_to_u128(domain.as_ref(), None));
             Some(match entry.kind {
-                EntryKind::Deny => ListEntryKind::DenyDomain(entry.domain?.into_owned()),
-                EntryKind::DenyRegex => ListEntryKind::DenyRegex(Regex::new(&entry.data?).ok()?),
+                EntryKind::Deny => ListEntryKind::DenyDomain(domain?),
+                EntryKind::DenyRegex => ListEntryKind::DenyRegex((entry.id, Some(Regex::new(&entry.data?).ok()?))),
                 EntryKind::AllowA | EntryKind::AllowAAAA => {
-                    ListEntryKind::Hosts((entry.domain?.into_owned(), entry.data?.parse::<IpAddr>().ok()?))
+                    ListEntryKind::Hosts((domain?, entry.data?.parse::<IpAddr>().ok()?))
                 }
             })
         }))

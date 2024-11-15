@@ -14,6 +14,7 @@ use super::ApiState;
 use crate::db::{EntryKind, ListEntry, Model as _, QueryLog, SqliteDb};
 use crate::hosts::ListEntryKind;
 use crate::server::DnsServerCommand;
+use crate::util::hash_to_u128;
 
 pub async fn health_check(State(_): State<Arc<ApiState>>) -> &'static str {
     "I'm alive"
@@ -27,7 +28,6 @@ pub struct ListEntryBody {
     pub label: Option<String>,
 }
 
-#[axum::debug_handler]
 pub async fn add_new_list_entry(State(state): State<Arc<ApiState>>, Json(entry): Json<ListEntryBody>) -> Response {
     let kind: EntryKind = match entry.kind.try_into() {
         Ok(kind) => kind,
@@ -37,13 +37,14 @@ pub async fn add_new_list_entry(State(state): State<Arc<ApiState>>, Json(entry):
         }
     };
 
+    let domain = entry.domain.as_ref().map(|domain| hash_to_u128(domain, None));
     // Validate data
-    let cmd = match kind {
+    let mut cmd = DnsServerCommand::AddNewListEntry(match kind {
         EntryKind::Deny => {
-            let Some(domain) = entry.domain.clone() else {
+            let Some(domain) = domain else {
                 return (StatusCode::BAD_REQUEST, "Missing 'domain' for a deny entry").into_response();
             };
-            DnsServerCommand::AddNewListEntry(ListEntryKind::DenyDomain(domain))
+            ListEntryKind::DenyDomain(domain)
         }
         EntryKind::DenyRegex => {
             let Some(regex) = entry.data.as_ref() else {
@@ -55,10 +56,10 @@ pub async fn add_new_list_entry(State(state): State<Arc<ApiState>>, Json(entry):
                     return (StatusCode::BAD_REQUEST, format!("Invalid regex: {:#}", e)).into_response();
                 }
             };
-            DnsServerCommand::AddNewListEntry(ListEntryKind::DenyRegex(regex))
+            ListEntryKind::DenyRegex((0, Some(regex)))
         }
         EntryKind::AllowA | EntryKind::AllowAAAA => {
-            let Some(domain) = entry.domain.clone() else {
+            let Some(domain) = domain else {
                 return (StatusCode::BAD_REQUEST, "Missing 'domain' for a hosts entry").into_response();
             };
             let Some(ip) = entry.data.as_ref() else {
@@ -70,14 +71,12 @@ pub async fn add_new_list_entry(State(state): State<Arc<ApiState>>, Json(entry):
                     return (StatusCode::BAD_REQUEST, "Invalid 'data' for the specified 'kind'").into_response();
                 }
             };
-            DnsServerCommand::AddNewListEntry(ListEntryKind::Hosts((domain, ip)))
+            ListEntryKind::Hosts((domain, ip))
         }
-    };
+    });
 
     if let Err(e) = async move {
         let mut connection = state.db.get_connection().await?;
-
-        let _ = state.command_tx.send(cmd).await;
 
         let entry = ListEntry::new(
             entry.domain.map(Into::into),
@@ -85,7 +84,14 @@ pub async fn add_new_list_entry(State(state): State<Arc<ApiState>>, Json(entry):
             entry.data.map(Into::into),
             entry.label.map(Into::into),
         )?;
-        entry.insert_into(&mut connection).await?;
+        let id = entry.replace_into(&mut connection).await?;
+
+        if let DnsServerCommand::AddNewListEntry(ListEntryKind::DenyRegex(cmd)) = &mut cmd {
+            // Assign a proper id to the regex so that it can later be deleted
+            cmd.0 = id;
+        }
+
+        let _ = state.command_tx.send(cmd).await;
 
         Ok::<(), anyhow::Error>(())
     }
@@ -150,7 +156,7 @@ pub async fn delete_list_entry(
     State(state): State<Arc<ApiState>>,
     Query(params): Query<DeleteListEntryParams>,
 ) -> Response {
-    match delete_list_entry_handler(&state.db, params.id).await {
+    match delete_list_entry_handler(state, params.id).await {
         Ok(()) => (),
         Err(e) => {
             tracing::debug!(filter = ?params, "Error while deleting a list entry: {:#}", e);
@@ -161,16 +167,35 @@ pub async fn delete_list_entry(
     StatusCode::OK.into_response()
 }
 
-async fn delete_list_entry_handler(db: &SqliteDb, id: u32) -> anyhow::Result<()> {
+async fn delete_list_entry_handler(state: Arc<ApiState>, id: u32) -> anyhow::Result<()> {
     let mut query = build_delete_list_entry_query(id);
 
-    let mut connection = db.get_connection().await?;
+    let mut connection = state.db.get_connection().await?;
 
-    let _deleted_entry: Option<ListEntry> = query
-        .build_query_as()
+    let Some(deleted_entry) = query
+        .build_query_as::<'_, ListEntry>()
         .fetch_optional(&mut *connection)
         .await
-        .context("failed to delete the list entry")?;
+        .context("failed to delete the list entry")?
+    else {
+        anyhow::bail!("non-existing list entry");
+    };
+
+    let domain = deleted_entry.domain.map(|domain| hash_to_u128(domain.as_ref(), None));
+    let cmd = DnsServerCommand::RemoveListEntry(match deleted_entry.kind {
+        EntryKind::Deny => ListEntryKind::DenyDomain(domain.context("bug: missing 'domain' for a Deny entry?")?),
+        EntryKind::DenyRegex => ListEntryKind::DenyRegex((id, None)),
+        EntryKind::AllowA | EntryKind::AllowAAAA => ListEntryKind::Hosts((
+            domain.context("bug: missing 'domain' for a Hosts entry?")?,
+            deleted_entry
+                .data
+                .context("bug: missing 'data' for a Hosts entry?")?
+                .parse()
+                .context("bug: failed to parse IpAddr from 'data'?")?,
+        )),
+    });
+
+    let _ = state.command_tx.send(cmd).await;
 
     Ok(())
 }

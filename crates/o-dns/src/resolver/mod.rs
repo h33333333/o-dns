@@ -14,7 +14,7 @@ use upstream::resolve_with_upstream;
 
 use crate::db::QueryLog;
 use crate::hosts::ListEntryKind;
-use crate::util::{get_response_dns_packet, hash_to_u128};
+use crate::util::get_response_dns_packet;
 use crate::{Connection, State, DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE};
 
 #[derive(Debug, Clone, Copy)]
@@ -223,7 +223,7 @@ impl Resolver {
                 });
         }
 
-        allowlist_records.is_some()
+        !response_packet.answers.is_empty()
     }
 
     async fn resolve_with_upstream(
@@ -268,10 +268,13 @@ impl Resolver {
 
     pub async fn add_list_entry(&self, entry: ListEntryKind) -> anyhow::Result<()> {
         match entry {
-            ListEntryKind::DenyDomain(domain) => {
-                self.state.denylist.write().await.add_entry(hash_to_u128(domain, None))
-            }
-            ListEntryKind::DenyRegex(regex) => self.state.denylist.write().await.add_regex(regex),
+            ListEntryKind::DenyDomain(domain) => self.state.denylist.write().await.add_entry(domain),
+            ListEntryKind::DenyRegex((id, regex)) => self
+                .state
+                .denylist
+                .write()
+                .await
+                .add_regex(id, regex.context("missing regex when adding a new list entry")?),
             ListEntryKind::Hosts((domain, ip_addr)) => {
                 let rdata = match ip_addr {
                     IpAddr::V4(address) => ResourceData::A { address },
@@ -281,11 +284,25 @@ impl Resolver {
                     .hosts
                     .write()
                     .await
-                    .add_entry(hash_to_u128(domain.as_bytes(), None), rdata)
+                    .add_entry(domain, rdata)
                     .context("error while adding an entry to the hosts file")?
             }
         }
 
         Ok(())
+    }
+
+    pub async fn remove_list_entry(&self, entry: ListEntryKind) {
+        match entry {
+            ListEntryKind::DenyDomain(domain) => self.state.denylist.write().await.remove_entry(domain),
+            ListEntryKind::DenyRegex((id, _)) => self.state.denylist.write().await.remove_regex(id),
+            ListEntryKind::Hosts((domain, ip_addr)) => {
+                let qtype = match ip_addr {
+                    IpAddr::V4(_) => QueryType::A,
+                    IpAddr::V6(_) => QueryType::AAAA,
+                };
+                self.state.hosts.write().await.remove_entry(domain, qtype)
+            }
+        }
     }
 }

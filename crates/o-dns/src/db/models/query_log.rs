@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Context as _;
 use o_dns_lib::DnsPacket;
 use serde::Serialize;
+use sqlx::sqlite::SqliteQueryResult;
 use sqlx::{FromRow, SqliteConnection};
 
 use super::Model;
@@ -54,7 +55,7 @@ impl QueryLog {
 impl Model for QueryLog {
     const NAME: &str = "LogEntry";
 
-    async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
+    async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<SqliteQueryResult> {
         sqlx::query(
             "INSERT INTO query_log (timestamp, domain, qtype, client, response_code, response_delay_ms, source)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -69,10 +70,9 @@ impl Model for QueryLog {
         .execute(connection)
         .await
         .context("error while inserting a log entry")
-        .map(|result| result.rows_affected())
     }
 
-    async fn bind_and_replace(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
+    async fn bind_and_replace(&self, connection: &mut SqliteConnection) -> anyhow::Result<SqliteQueryResult> {
         // No need to implement repalce logic for query logs, as these entries are additive
         self.bind_and_insert(connection).await
     }
