@@ -115,7 +115,7 @@ impl Model for ListEntry<'_> {
     async fn bind_and_replace(&self, connection: &mut SqliteConnection) -> anyhow::Result<u64> {
         sqlx::query(
             "REPLACE INTO allow_deny_list (id, timestamp, domain, kind, data, label)
-            VALUES ((SELECT id FROM allow_deny_list WHERE domain = ?2 AND kind = ?3 AND data = ?4), ?1, ?2, ?3, ?4, ?5)",
+            VALUES ((SELECT id FROM allow_deny_list WHERE ((domain is NULL AND ?2 IS NULL) OR domain = ?2) AND kind = ?3 AND ((data is NULL AND ?4 IS NULL) OR data = ?4)), ?1, ?2, ?3, ?4, ?5)",
         )
         .bind(self.timestamp)
         .bind(&self.domain)
