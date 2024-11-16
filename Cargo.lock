@@ -1118,6 +1118,7 @@ dependencies = [
  "axum",
  "bitflags",
  "clap",
+ "hashlink",
  "o-dns-lib",
  "regex",
  "serde",

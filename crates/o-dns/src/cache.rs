@@ -1,25 +1,28 @@
-use std::collections::HashMap;
 use std::time::Instant;
 
 use anyhow::Context;
 use bitflags::bitflags;
+use hashlink::LinkedHashMap;
 use o_dns_lib::{DnsPacket, QueryType, Question, ResourceData, ResourceRecord};
 use sha1::Digest as _;
 
 use crate::util::{get_caching_duration_for_packet, get_dns_query_hash, is_dnssec_qtype};
 
-#[derive(Default)]
+const DEFAULT_CACHE_CAPACITY: usize = 10_000;
+
 pub struct Cache {
-    query_cache: HashMap<u128, CachedQuery>,
-    rr_cache: HashMap<u128, CachedRecord>,
+    query_cache: LinkedHashMap<u128, CachedQuery>,
+    rr_cache: LinkedHashMap<u128, CachedRecord>,
 }
 
 impl Cache {
-    pub fn new() -> Self {
-        Default::default()
+    pub fn with_capacity(capacity: usize) -> Self {
+        Cache {
+            query_cache: LinkedHashMap::with_capacity(capacity),
+            rr_cache: LinkedHashMap::with_capacity(capacity),
+        }
     }
 
-    // TODO: add redis-like cache cleanup routine OR just offload this logic to Redis entirely
     pub fn cache_response(&mut self, response: &DnsPacket<'static>) -> anyhow::Result<()> {
         let cache_for = get_caching_duration_for_packet(response);
 
@@ -153,6 +156,15 @@ impl Cache {
         }
 
         true
+    }
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Cache {
+            query_cache: LinkedHashMap::with_capacity(DEFAULT_CACHE_CAPACITY),
+            rr_cache: LinkedHashMap::with_capacity(DEFAULT_CACHE_CAPACITY),
+        }
     }
 }
 
