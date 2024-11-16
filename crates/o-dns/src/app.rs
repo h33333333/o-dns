@@ -58,19 +58,12 @@ impl App {
 
         // I doubt there will ever be more than 5 commands sitting in this queue at once
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(5);
-        let server = DnsServer::new_with_workers(
-            dns_bind_addr,
-            upstream_resolver_addr,
-            log_tx,
-            args.max_parallel_connections,
-            command_rx,
-        )
-        .await
-        .context("failed to instantiate the DNS server")?;
+        let mut server = DnsServer::new(dns_bind_addr, upstream_resolver_addr, log_tx, command_rx)
+            .await
+            .context("failed to instantiate the DNS server")?;
 
         // Fill hosts and denylist with additional data from DB
         let mut connection = sqlite_db.get_connection().await?;
-        // TODO: it would be nice to this with one op and before wwe start serving the requests
         for entry in App::get_dynamic_list_entries(&mut connection).await? {
             if let Err(e) = server.process_command(DnsServerCommand::AddNewListEntry(entry)).await {
                 tracing::debug!("Failed to add a list entry: {:#}", e);
@@ -78,6 +71,7 @@ impl App {
         }
 
         let mut tasks = JoinSet::new();
+        server.add_workers(args.max_parallel_connections).await;
         tasks.spawn(server.block_until_completion());
         tasks.spawn(query_logger.watch_for_logs());
         if !args.disable_api_server {
