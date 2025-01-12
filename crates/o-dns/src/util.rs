@@ -1,81 +1,14 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::net::IpAddr;
-use std::ops::Deref;
 use std::path::Path;
 
 use anyhow::Context;
 use o_dns_lib::{DnsPacket, QueryType, Question, ResourceData, ResourceRecord, ResponseCode};
-use regex::Regex;
 use sha1::Digest;
-use sqlx::SqliteConnection;
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::fs::OpenOptions;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt};
 
-use crate::db::{EntryKind, ListEntry, Model};
-use crate::{Denylist, Hosts, DEFAULT_EDNS_BUF_CAPACITY, EDNS_DO_BIT};
-
-trait EntryFromStr {
-    async fn process_line(line: &mut str, db: &mut SqliteConnection) -> anyhow::Result<()>;
-}
-
-impl EntryFromStr for Hosts {
-    async fn process_line(line: &mut str, db: &mut SqliteConnection) -> anyhow::Result<()> {
-        let (domain, remaining_line) = parse_domain_name(line).context("failed to parse domain")?;
-
-        let (raw_ip_addr, entry_kind, remaining_line) = {
-            let mut it = remaining_line.splitn(2, ' ');
-            let raw_ip_addr = it.next().context("missing IP address")?;
-            let ip_addr: IpAddr = raw_ip_addr.parse().context("failed to parse IP address")?;
-            let entry_kind = match ip_addr {
-                IpAddr::V4(_) => EntryKind::AllowA,
-                IpAddr::V6(_) => EntryKind::AllowAAAA,
-            };
-            (raw_ip_addr, entry_kind, it.next().unwrap_or(""))
-        };
-
-        let label = parse_label(remaining_line);
-
-        let entry = ListEntry::new(
-            Some(domain.deref().into()),
-            entry_kind,
-            Some(raw_ip_addr.into()),
-            label.map(Into::into),
-        )
-        .context("failed to create a ListEntry")?;
-
-        entry.replace_into(db).await?;
-
-        Ok(())
-    }
-}
-
-impl EntryFromStr for Denylist {
-    async fn process_line(line: &mut str, db: &mut SqliteConnection) -> anyhow::Result<()> {
-        let (domain, entry_kind, data, remaining_line) = if line.starts_with('/') {
-            // Handle regex
-            let (regex_str, remaining_line) = parse_regex(line).context("failed to parse regex")?;
-
-            // Check if regex is okay
-            Regex::new(regex_str).map_err(|e| anyhow::anyhow!("failed to compile regex '{}': {}", regex_str, e))?;
-
-            (None, EntryKind::DenyRegex, Some((&*regex_str).into()), remaining_line)
-        } else {
-            // Handle domain
-            let (domain, remaining_line) = parse_domain_name(line).context("failed to parse domain")?;
-            (Some((&*domain).into()), EntryKind::Deny, None, remaining_line)
-        };
-
-        let label = parse_label(remaining_line);
-
-        let entry =
-            ListEntry::new(domain, entry_kind, data, label.map(Into::into)).context("failed to create a ListEntry")?;
-
-        entry.replace_into(db).await?;
-
-        Ok(())
-    }
-}
+use crate::{DEFAULT_EDNS_BUF_CAPACITY, EDNS_DO_BIT};
 
 pub fn get_response_dns_packet(
     request_packet: Option<&DnsPacket>,
@@ -153,143 +86,6 @@ pub fn hash_to_u128(data: impl AsRef<[u8]>, prefix: Option<&[u8]>) -> u128 {
     u128::from_be_bytes(hash[..16].try_into().unwrap())
 }
 
-pub async fn parse_hosts_file(path: &Path, db: &mut SqliteConnection) -> anyhow::Result<()> {
-    parse_list_file::<Hosts>(path, db)
-        .await
-        .context("error while parsing the hosts file")
-}
-
-pub async fn parse_denylist_file(path: &Path, db: &mut SqliteConnection) -> anyhow::Result<()> {
-    parse_list_file::<Denylist>(path, db)
-        .await
-        .context("error while parsing the denylist file")
-}
-
-async fn parse_list_file<T: EntryFromStr>(path: &Path, db: &mut SqliteConnection) -> anyhow::Result<()> {
-    let mut file = BufReader::new(
-        File::open(path)
-            .await
-            .map_err(|e| anyhow::anyhow!("error while opening the file {:?}: {}", path, e))?,
-    );
-
-    let mut line = String::new();
-    loop {
-        // Clear the buffer
-        line.clear();
-
-        if file.read_line(&mut line).await.context("error while reading a line")? == 0 {
-            // Reached EOF
-            break;
-        }
-
-        // Remove any leading whitespaces
-        let trimmed_len = line.trim_start().len();
-        let domain_start_idx = line.len() - trimmed_len;
-        let remaining_line = &mut line[domain_start_idx..];
-
-        // Skip comments and empty lines
-        if remaining_line.is_empty() || remaining_line.starts_with('#') {
-            continue;
-        }
-
-        if let Err(e) = T::process_line(remaining_line, db).await {
-            tracing::debug!("Error while processing the line '{}': {}", remaining_line, e);
-            continue;
-        }
-    }
-
-    Ok(())
-}
-
-fn parse_label(line: &str) -> Option<&str> {
-    line.find('[').and_then(|label_start_idx| {
-        line[label_start_idx..]
-            .find(']')
-            .and_then(|label_end_idx| line.get(label_start_idx + 1..label_end_idx))
-    })
-}
-
-/// Parses a regex formatted like `/<re>/`
-fn parse_regex(mut line: &mut str) -> anyhow::Result<(&mut str, &mut str)> {
-    if !line.starts_with('/') {
-        anyhow::bail!("line doesn't contain a regex");
-    }
-
-    // Skip the leading '/'
-    line = &mut line[1..];
-    let regex_length = line
-        .bytes()
-        .scan(false, |escaped_symbol, byte| {
-            if byte == b'/' && !*escaped_symbol {
-                return None;
-            }
-            *escaped_symbol = byte == b'\\' && !*escaped_symbol;
-            Some(())
-        })
-        .count();
-
-    let (regex, remaining_line) = line.split_at_mut(regex_length);
-
-    if !remaining_line.starts_with('/') {
-        // Regex with a missing closing delimiter
-        anyhow::bail!("malformed regex");
-    }
-
-    // Remove the remaining '/'
-    Ok((regex, &mut remaining_line[1..]))
-}
-
-fn parse_domain_name(line: &mut str) -> Option<(&mut str, &mut str)> {
-    let mut domain_length = 0;
-    let mut is_wildcard_label = false;
-    for (idx, byte) in unsafe { line.as_bytes_mut().iter_mut().enumerate() } {
-        if is_wildcard_label && *byte != b'.' {
-            // Protect against entries like '*test.abc'
-            return None;
-        } else {
-            is_wildcard_label = false;
-        }
-
-        if byte.is_ascii_alphanumeric() {
-            byte.make_ascii_lowercase();
-            domain_length += 1;
-        } else if idx > 0 && (*byte == b'.' || *byte == b'-') {
-            domain_length += 1;
-        } else if idx == 0 && (*byte == b'*') {
-            // A wildcard domain
-            domain_length += 1;
-            is_wildcard_label = true;
-        } else {
-            // Stop iterating as we encountered an invalid character.
-            // Process whatever we gathered at this point and continue to the next line
-            break;
-        }
-    }
-    let domain = &line[..domain_length];
-
-    // Return early if encountered a malformed line with a single domain label
-    let tld_start_idx = domain.rfind('.')?;
-
-    if tld_start_idx == domain.len() - 1 {
-        // Malformed line: 'example.'
-        return None;
-    }
-
-    let tld = &domain[tld_start_idx + 1..];
-    if tld.len() < 2 || !tld.bytes().all(|byte| byte.is_ascii_alphabetic()) {
-        // Bad TLD: 'example.b' or 'example.t3st'
-        None
-    } else {
-        let (domain, remaining_line) = line.split_at_mut(domain_length);
-
-        // Account for any leading whitespaces in the remaining line
-        let whitespace_length = remaining_line.len() - remaining_line.trim_start().len();
-        let remaining_line = &mut remaining_line[whitespace_length..];
-
-        Some((domain, remaining_line))
-    }
-}
-
 // TODO: add these RRs to o-dns-lib?
 pub fn is_dnssec_qtype(qtype: u16) -> bool {
     match qtype {
@@ -320,4 +116,40 @@ pub fn get_minimum_ttl_for_packet(packet: &DnsPacket<'_>) -> Option<u32> {
         .filter(|rr| rr.resource_data.get_query_type() != QueryType::OPT)
         .map(|rr| rr.ttl)
         .min()
+}
+
+pub async fn read_checksum(path: impl AsRef<Path>) -> anyhow::Result<Option<[u8; 20]>> {
+    let mut checksum_buf = [0; 20];
+
+    let mut checksum_file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .read(true)
+        .open(path)
+        .await
+        .context("failed to open the checksum file")?;
+
+    let read = checksum_file
+        .read(&mut checksum_buf)
+        .await
+        .context("failed to read the checksum")?;
+
+    if read == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(checksum_buf))
+    }
+}
+
+pub async fn write_to_file(path: impl AsRef<Path>, data: &[u8]) -> anyhow::Result<()> {
+    let mut checksum_file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(path)
+        .await
+        .context("failed open the file")?;
+
+    checksum_file.write_all(data).await.context("failed to write the data")
 }

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context as _;
-pub use models::{EntryKind, ListEntry, Model, QueryLog};
+pub use models::{EntryKind, ListEntry, ListEntryUpdateRequest, Model, QueryLog, StatsEntry, Updatable};
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Sqlite, SqlitePool, Transaction};
@@ -15,7 +15,7 @@ pub struct SqliteDb {
 
 impl SqliteDb {
     pub async fn new(path: &Path) -> anyhow::Result<Self> {
-        let path = path.with_file_name("query_log.db");
+        let path = path.join("sqlite.db");
 
         // Ensure that all directories exist
         tokio::fs::create_dir_all(path.parent().unwrap_or(Path::new("/")))

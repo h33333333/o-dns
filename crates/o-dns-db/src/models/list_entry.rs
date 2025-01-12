@@ -6,9 +6,9 @@ use serde::Serialize;
 use sqlx::sqlite::{SqliteQueryResult, SqliteRow};
 use sqlx::{Decode, FromRow, Row, SqliteConnection};
 
-use super::Model;
+use super::{Model, Updatable};
 
-#[derive(Debug, Serialize, Clone, Copy)]
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
     Deny,
     DenyRegex,
@@ -94,12 +94,19 @@ impl<'a> ListEntry<'a> {
 }
 
 impl Model for ListEntry<'_> {
-    const NAME: &'static str = "LogEntry";
+    const NAME: &'static str = "ListEntry";
 
     async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<SqliteQueryResult> {
         sqlx::query(
             "INSERT INTO allow_deny_list (timestamp, domain, kind, data, label)
-            VALUES (?1, ?2, ?3, ?4, ?5)",
+            SELECT ?1, ?2, ?3, ?4, ?5
+            WHERE NOT EXISTS (
+                SELECT 1 FROM allow_deny_list
+                WHERE (domain IS NULL AND ?2 IS NULL OR domain = ?2)
+                AND (kind IS NULL AND ?3 IS NULL OR kind = ?3)
+                AND (data IS NULL AND ?4 IS NULL OR data = ?4)
+            )
+            ",
         )
         .bind(self.timestamp)
         .bind(&self.domain)
@@ -124,5 +131,50 @@ impl Model for ListEntry<'_> {
         .execute(connection)
         .await
         .context("error while inserting a list entry")
+    }
+}
+
+pub struct ListEntryUpdateRequest<'a> {
+    pub kind: EntryKind,
+    pub domain: Option<Cow<'a, str>>,
+    pub data: Option<Cow<'a, str>>,
+    pub label: Option<Cow<'a, str>>,
+}
+
+impl<'a> ListEntryUpdateRequest<'a> {
+    pub fn new(
+        kind: EntryKind,
+        domain: Option<Cow<'a, str>>,
+        data: Option<Cow<'a, str>>,
+        label: Option<Cow<'a, str>>,
+    ) -> Self {
+        ListEntryUpdateRequest {
+            kind,
+            domain,
+            data,
+            label,
+        }
+    }
+}
+
+impl<'a> Updatable<ListEntryUpdateRequest<'a>> for ListEntry<'_> {
+    async fn bind_and_update(
+        connection: &mut SqliteConnection,
+        id: u32,
+        request: ListEntryUpdateRequest<'a>,
+    ) -> anyhow::Result<SqliteQueryResult> {
+        if request.data.is_none() && request.domain.is_none() && request.label.is_none() {
+            anyhow::bail!("Wrong update request: no field was changed")
+        }
+
+        sqlx::query("UPDATE allow_deny_list SET kind = ?1, domain = ?2, data = ?3, label = ?4 WHERE id = ?5")
+            .bind(request.kind as u8)
+            .bind(request.domain)
+            .bind(request.data)
+            .bind(request.label)
+            .bind(id)
+            .execute(connection)
+            .await
+            .context("error while updating a list entry")
     }
 }

@@ -1,7 +1,7 @@
 mod logging;
 pub use logging::setup_logging;
-mod hosts;
-pub use hosts::{Denylist, Hosts};
+mod access_lists;
+pub use access_lists::{Denylist, Hosts};
 mod cache;
 mod connection;
 pub use connection::Connection;
@@ -11,10 +11,8 @@ mod server;
 pub use server::DnsServer;
 mod cli;
 pub use cli::Args;
-mod api;
 mod app;
 pub use app::App;
-mod db;
 mod query_logger;
 mod util;
 

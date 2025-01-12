@@ -1,0 +1,19 @@
+[package]
+name = "o-dns-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+o-dns-lib = { workspace = true }
+o-dns-common = { workspace = true }
+o-dns-db = { workspace = true }
+
+anyhow = "1.0.89"
+tracing = "0.1.40"
+axum = { version = "0.7.7", features = ["macros"] }
+futures = "0.3.31"
+regex = "1.11.1"
+serde = { version = "1.0.214", features = ["derive"] }
+tokio = { version = "1.40.0", features = ["net", "sync"] }
+sqlx = { version = "0.8.2", features = ["runtime-tokio", "sqlite", "derive"] }
+tower-http = { version = "0.6.2", features = ["cors"] }

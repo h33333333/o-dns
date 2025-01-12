@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::path::Path;
 
 use anyhow::Context;
 use tracing::level_filters::LevelFilter;
@@ -11,11 +12,14 @@ use tracing_subscriber::{EnvFilter, Layer};
 pub const LOGGING_ENV: &str = "ODNS_LOG";
 pub const LOGGING_FILE_ENV: &str = "ODNS_LOG_FILE";
 
-pub fn setup_logging() -> anyhow::Result<()> {
+pub fn setup_logging(config_path: &Path) -> anyhow::Result<()> {
+    let mut log_path = config_path.to_path_buf();
+    log_path.push("server.log");
+
     let log_file = File::options()
         .create(true)
         .append(true)
-        .open("debug.log")
+        .open(log_path)
         .context("failed to create a log file")?;
 
     tracing_subscriber::registry()
