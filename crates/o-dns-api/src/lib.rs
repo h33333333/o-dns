@@ -6,12 +6,11 @@ use std::net::SocketAddr;
 
 use anyhow::Context;
 use axum::Router;
+use o_dns_common::DnsServerCommand;
+use o_dns_db::SqliteDb;
 use routes::get_router;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::Sender;
-
-use crate::db::SqliteDb;
-use crate::server::DnsServerCommand;
 
 pub struct ApiServer {
     router: Router,

@@ -2,13 +2,13 @@ use std::net::IpAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context as _;
+use o_dns_common::ResponseSource;
 use o_dns_lib::DnsPacket;
 use serde::Serialize;
 use sqlx::sqlite::SqliteQueryResult;
 use sqlx::{FromRow, SqliteConnection};
 
 use super::Model;
-use crate::resolver::ResponseSource;
 
 #[derive(Debug, Serialize, FromRow)]
 pub struct QueryLog {
@@ -53,7 +53,7 @@ impl QueryLog {
 }
 
 impl Model for QueryLog {
-    const NAME: &str = "LogEntry";
+    const NAME: &'static str = "LogEntry";
 
     async fn bind_and_insert(&self, connection: &mut SqliteConnection) -> anyhow::Result<SqliteQueryResult> {
         sqlx::query(
@@ -73,7 +73,7 @@ impl Model for QueryLog {
     }
 
     async fn bind_and_replace(&self, connection: &mut SqliteConnection) -> anyhow::Result<SqliteQueryResult> {
-        // No need to implement repalce logic for query logs, as these entries are additive
+        // No need to implement replace logic for query logs, as these entries are additive
         self.bind_and_insert(connection).await
     }
 }

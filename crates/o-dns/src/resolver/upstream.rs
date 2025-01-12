@@ -62,6 +62,7 @@ pub(super) async fn resolve_with_upstream(
             if connection.is_tcp() {
                 anyhow::bail!("response truncation when using TCP");
             }
+
             // Retry using TCP
             force_tcp = true;
             buf.reset_pos();

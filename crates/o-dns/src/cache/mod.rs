@@ -1,14 +1,15 @@
-use std::time::Instant;
+mod cached_query;
+mod cached_record;
 
 use anyhow::Context;
-use bitflags::bitflags;
+use cached_query::CachedQuery;
+use cached_record::{CacheFlags, CachedRecord};
 use hashlink::LinkedHashMap;
-use o_dns_lib::{DnsPacket, QueryType, Question, ResourceData, ResourceRecord};
-use sha1::Digest as _;
+use o_dns_lib::{DnsPacket, QueryType, Question};
 
 use crate::util::{get_caching_duration_for_packet, get_dns_query_hash, is_dnssec_qtype};
 
-const DEFAULT_CACHE_CAPACITY: usize = 10_000;
+const DEFAULT_CACHE_CAPACITY: usize = 1000;
 
 pub struct Cache {
     query_cache: LinkedHashMap<u128, CachedQuery>,
@@ -164,107 +165,6 @@ impl Default for Cache {
         Cache {
             query_cache: LinkedHashMap::with_capacity(DEFAULT_CACHE_CAPACITY),
             rr_cache: LinkedHashMap::with_capacity(DEFAULT_CACHE_CAPACITY),
-        }
-    }
-}
-
-bitflags! {
-    struct CacheFlags: u8 {
-        const AD = 1;
-        const DNSSEC = 1 << 1;
-    }
-}
-
-struct CachedRecord {
-    qname: String,
-    resource_data: ResourceData<'static>,
-    ttl: u32,
-    class: u16,
-    flags: CacheFlags,
-    added: Instant,
-}
-
-impl CachedRecord {
-    fn new(value: ResourceRecord<'static>, authenticated_data: bool) -> Self {
-        let mut flags = CacheFlags::empty();
-        flags.set(CacheFlags::AD, authenticated_data);
-        CachedRecord {
-            qname: value.name.into_owned(),
-            resource_data: value.resource_data,
-            ttl: value.ttl,
-            class: value.class,
-            flags,
-            added: Instant::now(),
-        }
-    }
-
-    fn get_hash(&self) -> u128 {
-        let qtype: u16 = self.resource_data.get_query_type().into();
-
-        let mut hasher = sha1::Sha1::new();
-
-        hasher.update(self.qname.as_bytes());
-        hasher.update(qtype.to_be_bytes());
-        hasher.update(self.class.to_be_bytes());
-
-        // Hash the rdata
-        match &self.resource_data {
-            ResourceData::UNKNOWN { rdata, .. } => {
-                hasher.update(rdata);
-            }
-            ResourceData::A { address } => {
-                hasher.update(address.octets());
-            }
-            ResourceData::NS { ns_domain_name } => hasher.update(ns_domain_name.as_bytes()),
-            ResourceData::CNAME { cname } => hasher.update(cname.as_bytes()),
-            ResourceData::AAAA { address } => hasher.update(address.octets()),
-            ResourceData::OPT { .. } => unreachable!("bug: we shouldn't cache OPT RRs"),
-        };
-
-        let hash = hasher.finalize();
-
-        u128::from_be_bytes(hash[..16].try_into().unwrap())
-    }
-
-    fn as_rr(&self) -> ResourceRecord<'static> {
-        let ttl = self.ttl.saturating_sub(self.added.elapsed().as_secs() as u32);
-        ResourceRecord::new(
-            self.qname.to_owned().into(),
-            self.resource_data.clone(),
-            Some(ttl),
-            Some(self.class),
-        )
-    }
-}
-
-struct CachedQuery {
-    answers: Option<Vec<u128>>,
-    authorities: Option<Vec<u128>>,
-    additionals: Option<Vec<u128>>,
-    flags: CacheFlags,
-    added: Instant,
-    ttd: u32,
-}
-
-impl CachedQuery {
-    fn new(response_packet: &DnsPacket<'_>, ttd: u32) -> Self {
-        let mut flags = CacheFlags::empty();
-        flags.set(CacheFlags::AD, response_packet.header.z[1]);
-
-        if let Some(edns_data) = response_packet
-            .edns
-            .and_then(|idx| response_packet.additionals.get(idx).and_then(|rr| rr.get_edns_data()))
-        {
-            flags.set(CacheFlags::DNSSEC, edns_data.dnssec_ok_bit);
-        }
-
-        CachedQuery {
-            answers: None,
-            authorities: None,
-            additionals: None,
-            flags,
-            added: Instant::now(),
-            ttd,
         }
     }
 }

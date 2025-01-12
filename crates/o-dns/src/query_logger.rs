@@ -1,10 +1,9 @@
 use std::time::Duration;
 
 use anyhow::Context;
+use o_dns_db::{Model as _, QueryLog, SqliteDb};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{interval, Instant};
-
-use crate::db::{Model as _, QueryLog, SqliteDb};
 
 const DEFAULT_LOG_CHUNK: usize = 64;
 

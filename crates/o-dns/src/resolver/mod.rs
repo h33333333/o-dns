@@ -4,6 +4,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use o_dns_common::{AccessListEntryKind, ResponseSource};
+use o_dns_db::QueryLog;
 use o_dns_lib::{
     ByteBuf, DnsPacket, EncodeToBuf as _, QueryType, Question, ResourceData, ResourceRecord, ResponseCode,
 };
@@ -12,19 +14,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
 use upstream::resolve_with_upstream;
 
-use crate::db::QueryLog;
-use crate::hosts::ListEntryKind;
 use crate::util::get_response_dns_packet;
 use crate::{Connection, State, DEFAULT_EDNS_BUF_CAPACITY, MAX_STANDARD_DNS_MSG_SIZE};
-
-#[derive(Debug, Clone, Copy)]
-pub enum ResponseSource {
-    Denylist,
-    Allowlist,
-    Cache,
-    NoRecurse,
-    Upstream,
-}
 
 pub struct Resolver {
     state: Arc<State>,
@@ -58,7 +49,7 @@ impl Resolver {
         // Create an empty response packet and copy the relevant settings from the query
         let mut response_packet = get_response_dns_packet(parsed_packet.as_ref().ok(), None);
 
-        let (cache_response, source) = 'resolve: {
+        let (add_response_to_cache, source) = 'resolve: {
             let Ok(query_packet) = parsed_packet.as_ref() else {
                 response_packet.header.response_code = ResponseCode::FormatError;
                 break 'resolve (false, None);
@@ -89,8 +80,8 @@ impl Resolver {
                 break 'resolve (false, Some(ResponseSource::Denylist));
             }
 
-            // Check if requested host is in allow/hosts list
-            if self.allowlist_lookup(question, &mut response_packet).await {
+            // Check if requested host is in hosts list
+            if self.hosts_lookup(question, &mut response_packet).await {
                 tracing::debug!(
                     qname = ?question.qname,
                     qtype = ?question.query_type,
@@ -101,7 +92,6 @@ impl Resolver {
 
             // Return if requestor doesn't want recursive resolution
             if !query_packet.header.recursion_desired {
-                // TODO: include root/TLD NS in authority section in this case
                 break 'resolve (false, Some(ResponseSource::NoRecurse));
             }
 
@@ -140,7 +130,7 @@ impl Resolver {
             )
             .context("error while encoding the response")?;
 
-        if cache_response {
+        if add_response_to_cache {
             let mut cache = self.state.cache.write().await;
             cache
                 .cache_response(&response_packet)
@@ -177,9 +167,9 @@ impl Resolver {
     }
 
     async fn denylist_lookup<'a>(&self, question: &Question<'a>, response_packet: &mut DnsPacket<'a>) -> bool {
-        let cache = self.state.denylist.read().await;
-        let is_in_denylist = cache.contains_entry(&question.qname);
-        drop(cache);
+        let denylist = self.state.denylist.read().await;
+        let is_in_denylist = denylist.contains_entry(&question.qname);
+        drop(denylist);
 
         if is_in_denylist {
             response_packet.header.is_authoritative = true;
@@ -204,11 +194,11 @@ impl Resolver {
         is_in_denylist
     }
 
-    async fn allowlist_lookup<'a>(&self, question: &Question<'a>, response_packet: &mut DnsPacket<'a>) -> bool {
-        let cache = self.state.hosts.read().await;
-        let allowlist_records = cache.get_entry(question.qname.as_ref());
+    async fn hosts_lookup<'a>(&self, question: &Question<'a>, response_packet: &mut DnsPacket<'a>) -> bool {
+        let hosts = self.state.hosts.read().await;
+        let hosts_records = hosts.get_entry(question.qname.as_ref());
 
-        if let Some(records) = allowlist_records {
+        if let Some(records) = hosts_records {
             response_packet.header.is_authoritative = true;
             records
                 .iter()
@@ -266,16 +256,16 @@ impl Resolver {
         Ok(())
     }
 
-    pub async fn add_list_entry(&self, entry: ListEntryKind) -> anyhow::Result<()> {
+    pub async fn add_list_entry(&self, entry: AccessListEntryKind) -> anyhow::Result<()> {
         match entry {
-            ListEntryKind::DenyDomain(domain) => self.state.denylist.write().await.add_entry(domain),
-            ListEntryKind::DenyRegex((id, regex)) => self
+            AccessListEntryKind::DenyDomain(domain) => self.state.denylist.write().await.add_entry(domain),
+            AccessListEntryKind::DenyRegex((id, regex)) => self
                 .state
                 .denylist
                 .write()
                 .await
                 .add_regex(id, regex.context("missing regex when adding a new list entry")?),
-            ListEntryKind::Hosts((domain, ip_addr)) => {
+            AccessListEntryKind::Hosts((domain, ip_addr)) => {
                 let rdata = match ip_addr {
                     IpAddr::V4(address) => ResourceData::A { address },
                     IpAddr::V6(address) => ResourceData::AAAA { address },
@@ -292,11 +282,11 @@ impl Resolver {
         Ok(())
     }
 
-    pub async fn remove_list_entry(&self, entry: ListEntryKind) {
+    pub async fn remove_list_entry(&self, entry: AccessListEntryKind) {
         match entry {
-            ListEntryKind::DenyDomain(domain) => self.state.denylist.write().await.remove_entry(domain),
-            ListEntryKind::DenyRegex((id, _)) => self.state.denylist.write().await.remove_regex(id),
-            ListEntryKind::Hosts((domain, ip_addr)) => {
+            AccessListEntryKind::DenyDomain(domain) => self.state.denylist.write().await.remove_entry(domain),
+            AccessListEntryKind::DenyRegex((id, _)) => self.state.denylist.write().await.remove_regex(id),
+            AccessListEntryKind::Hosts((domain, ip_addr)) => {
                 let qtype = match ip_addr {
                     IpAddr::V4(_) => QueryType::A,
                     IpAddr::V6(_) => QueryType::AAAA,

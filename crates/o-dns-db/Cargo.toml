@@ -1,0 +1,13 @@
+[package]
+name = "o-dns-db"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+o-dns-lib = { workspace = true }
+o-dns-common = { workspace = true }
+
+anyhow = "1.0.89"
+sqlx = { version = "0.8.2", features = ["runtime-tokio", "sqlite", "derive"] }
+tokio = { version = "1.40.0", features = ["fs"] }
+serde = { version = "1.0.214", features = ["derive"] }

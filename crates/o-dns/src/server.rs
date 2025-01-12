@@ -2,23 +2,17 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use o_dns_common::DnsServerCommand;
+use o_dns_db::QueryLog;
 use o_dns_lib::{ByteBuf, DnsPacket, FromBuf as _};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc::{Receiver, UnboundedSender};
 use tokio::task::JoinSet;
 use tracing::Instrument;
 
-use crate::db::QueryLog;
-use crate::hosts::ListEntryKind;
 use crate::{Connection, Resolver, State, DEFAULT_EDNS_BUF_CAPACITY};
 
 type HandlerResult = anyhow::Result<()>;
-
-#[derive(Debug)]
-pub enum DnsServerCommand {
-    AddNewListEntry(ListEntryKind),
-    RemoveListEntry(ListEntryKind),
-}
 
 pub struct DnsServer {
     udp_socket: Arc<UdpSocket>,

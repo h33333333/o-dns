@@ -1,5 +1,5 @@
-# This is a sample blacklist that can be loaded into the DNS server
-# Format:
+# This is a sample hosts file that can be loaded into the DNS server
+# Format
 # <Domain> <IpAddr> [<Optional label>]
 
 example.com 10.0.0.1 [Label for this entry]
