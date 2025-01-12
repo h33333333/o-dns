@@ -1,0 +1,33 @@
+services:
+  o-dns-server:
+    container_name: o-dns-server
+    build: .
+    command:
+      - --config-path
+      - /etc/o-dns
+      - --allowlist-path
+      - /allowlist
+      - --denylist-path
+      - /denylist
+    ports:
+      - "7777:53/tcp"
+      - "7777:53/udp"
+      - "3000:80/tcp"
+    volumes:
+      - "configs:/etc/o-dns"
+      - "./denylist_sample:/denylist"
+      - "./hosts_sample:/allowlist"
+    restart: unless-stopped
+
+  o-dns-ui:
+    container_name: o-dns-ui
+    build:
+      context: ./ui/.
+      args:
+        API_SERVER_URL: http://127.0.0.1:3000
+    ports:
+      - "80:80/tcp"
+    restart: unless-stopped
+
+volumes:
+  configs: {}
