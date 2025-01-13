@@ -30,8 +30,11 @@ export const useTable = <TData, TValue>(
         pageSize: defaultPageSize ?? pageSizes[0] ?? 5,
     });
 
-    const [globalFilterDebounced, setGlobalFilterDebounced, setGlobalFilter] =
-        useDebounced<string>(500, "");
+    const {
+        state: globalFilterDebounced,
+        setStateDebounced: setGlobalFilterDebounced,
+        setState: setGlobalFilter,
+    } = useDebounced<string>(500, "");
 
     const columns = useMemo(() => {
         const columns: ColumnDef<TData, TValue>[] = [];
@@ -86,5 +89,5 @@ export const useTable = <TData, TValue>(
         },
     });
 
-    return [table, pagination, setGlobalFilterDebounced] as const;
+    return { table, pagination, setGlobalFilterDebounced };
 };

@@ -8,7 +8,7 @@ import { StatsDashboard } from "./StatsDashboard";
 import { Skeleton } from "./ui/skeleton";
 
 const Dashboard = () => {
-    const [, , data] = useQueryLogs();
+    const { data } = useQueryLogs();
 
     return data ? (
         <div className="flex flex-col gap-4">

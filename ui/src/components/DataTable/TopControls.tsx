@@ -30,7 +30,7 @@ export const TopControls = (props: TopControlsProps) => {
     const [showPaginationControls, enableFuzzySearch, showTableSettings] = controls;
 
     const dimensions = useWindowDimensions();
-    const enabledControls = useMemo(() => controls.filter(v => !!v).length, [controls]);
+    const enabledControls = useMemo(() => controls.filter(Boolean).length, [controls]);
 
     return enabledControls ? (
         <div

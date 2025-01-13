@@ -9,11 +9,11 @@ const debounce = (debouncedCall: Function, delay: number) => {
 };
 
 const useDebounced = <T>(delay: number, initialValue?: T | (() => T)) => {
-    const [state, _setState] = useState(initialValue);
+    const [state, setState] = useState(initialValue);
 
     const debounced = useMemo(() => {
         return debounce((value: SetStateAction<T | undefined>) => {
-            _setState(value);
+            setState(value);
         }, delay);
     }, [delay]);
 
@@ -24,7 +24,7 @@ const useDebounced = <T>(delay: number, initialValue?: T | (() => T)) => {
         [debounced]
     );
 
-    return [state, setStateDebounced, _setState] as const;
+    return { state, setStateDebounced, setState };
 };
 
 export default useDebounced;

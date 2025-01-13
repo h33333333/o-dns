@@ -29,6 +29,19 @@ const formSchema = z.object({
     label: z.string().optional(),
 });
 
+const fieldConfigs = {
+    blockDirective: {
+        label: "Block Directive",
+        description: "A valid domain/RegExp",
+        placeholder: ".*\\.ru$",
+    },
+    label: {
+        label: "Label",
+        description: "Optional label",
+        placeholder: "All russian domains",
+    },
+};
+
 export const Denylist = () => {
     const [, , [, data]] = useListEntries();
     const modifyEntry = useModifyDenyListEntry();
@@ -123,18 +136,7 @@ export const Denylist = () => {
                 }}
                 form={form}
                 onFormSubmit={values => onEditEntrySubmit(values, selectedItem)}
-                fieldConfigs={{
-                    blockDirective: {
-                        label: "Block Directive",
-                        description: "A valid domain/RegExp",
-                        placeholder: ".*\\.ru$",
-                    },
-                    label: {
-                        label: "Label",
-                        description: "Optional label",
-                        placeholder: "All russian domains",
-                    },
-                }}
+                fieldConfigs={fieldConfigs}
             />
         </>
     ) : (

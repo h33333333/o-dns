@@ -19,7 +19,6 @@ export const PaginationSelector = (props: PaginationSelectorProps) => {
 
     return (
         <div className="flex gap-6 items-center">
-            {/* <span className="text-muted-foreground hidden sm:block">Page size</span> */}
             <Select
                 value={currentPageSize.toString()}
                 onValueChange={value => setter(Number(value))}>

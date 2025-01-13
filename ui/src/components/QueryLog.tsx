@@ -4,7 +4,7 @@ import { useQueryLogs } from "@/common/useQueryLogs";
 import { FullScreenLoader } from "./FullScreenLoader";
 
 const QueryLog = () => {
-    const [, , data] = useQueryLogs();
+    const { data } = useQueryLogs();
 
     return data ? (
         <DataTable

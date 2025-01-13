@@ -53,5 +53,5 @@ export const useStats = () => {
         return stats;
     }, [rawData]);
 
-    return [isPending, error, data] as const;
+    return { isPending, error, data };
 };

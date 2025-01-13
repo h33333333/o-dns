@@ -24,7 +24,7 @@ const viewConfigs = {
 export const QueryChart = () => {
     const [activeView, setActiveView] = useState<keyof typeof viewConfigs>("type");
 
-    const [, , data] = useQueryLogs(
+    const { data } = useQueryLogs(
         query => query.timestamp * 1000 >= Date.now() - DAY_IN_MILLIS
     );
 

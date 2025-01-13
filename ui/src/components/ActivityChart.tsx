@@ -30,7 +30,7 @@ export const ActivityChart = () => {
     const [activeChart, setActiveChart] =
         React.useState<keyof typeof chartConfig>("total");
 
-    const [, , data] = useQueryLogs(
+    const { data } = useQueryLogs(
         query => query.timestamp * 1000 >= Date.now() - DAY_IN_MILLIS && !!query.client
     );
 

@@ -13,13 +13,13 @@ const statsConfig: Record<
 };
 
 export const StatsDashboard = () => {
-    const [, , stats] = useStats();
+    const { data } = useStats();
 
-    if (!stats) return null;
+    if (!data) return null;
 
     return (
         <>
-            {Object.entries(stats).map(([key, stat]) => {
+            {Object.entries(data).map(([key, stat]) => {
                 const config = statsConfig[key as keyof Stats];
                 return (
                     <div
