@@ -38,9 +38,7 @@ export const TableSettingsDropdown = (props: TableSettingsDropdownProps) => {
                                 className="capitalize"
                                 key={col.id}
                                 checked={col.getIsVisible()}
-                                onCheckedChange={checked =>
-                                    col.toggleVisibility(checked)
-                                }>
+                                onCheckedChange={col.toggleVisibility}>
                                 {col.id}
                             </DropdownMenuCheckboxItem>
                         );

@@ -50,7 +50,7 @@ export default function DataTable<TData, TValue>(props: DataTableProps<TData, TV
 
     const [isPageDialogOpen, setIsPageDialogOpen] = useState(false);
 
-    const [table, pagination, setGlobalFilterDebounced] = useTable(
+    const { table, pagination, setGlobalFilterDebounced } = useTable(
         columnsRaw,
         data,
         pageSizes,
@@ -70,10 +70,8 @@ export default function DataTable<TData, TValue>(props: DataTableProps<TData, TV
                     showColumnVisibilityControls,
                 ]}
                 pageSizes={pageSizes}
-                setPaginationCallback={pageSize => {
-                    table.setPageSize(pageSize);
-                }}
-                onFuzzyFilterChange={value => setGlobalFilterDebounced(value)}
+                setPaginationCallback={table.setPageSize}
+                onFuzzyFilterChange={setGlobalFilterDebounced}
                 addEntryCallback={addEntryCallback}
                 deleteSelectedRowsCallback={deleteSelectedRowsCallback}
             />
@@ -111,7 +109,7 @@ export default function DataTable<TData, TValue>(props: DataTableProps<TData, TV
                     currentPage={pagination.pageIndex}
                     isDialogOpen={isPageDialogOpen}
                     setIsDialogOpen={setIsPageDialogOpen}
-                    setNewPage={page => table.setPageIndex(page)}
+                    setNewPage={table.setPageIndex}
                     locationText={`Showing entries ${pagination.pageIndex * pagination.pageSize + 1} - ${Math.min(table.getRowCount(), pagination.pageIndex * pagination.pageSize + pagination.pageSize)} (of ${table.getRowCount()})`}
                 />
             )}

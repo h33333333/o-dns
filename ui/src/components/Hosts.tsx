@@ -17,6 +17,24 @@ const formSchema = z.object({
     label: z.string().optional(),
 });
 
+const fieldConfigs = {
+    domain: {
+        label: "Domain",
+        description: "Domain that you want to add to the hosts file",
+        placeholder: "example.com",
+    },
+    ip: {
+        label: "IP",
+        description: "IP address that you want to associate this domain with",
+        placeholder: "127.0.0.1",
+    },
+    label: {
+        label: "Label",
+        description: "Optional label",
+        placeholder: "An example domain",
+    },
+};
+
 export const Hosts = () => {
     const [, , [data]] = useListEntries();
     const modifyDomain = useModifyDomain();
@@ -114,24 +132,7 @@ export const Hosts = () => {
                 }}
                 form={form}
                 onFormSubmit={values => onEditEntrySubmit(values, selectedItem)}
-                fieldConfigs={{
-                    domain: {
-                        label: "Domain",
-                        description: "Domain that you want to add to the hosts file",
-                        placeholder: "example.com",
-                    },
-                    ip: {
-                        label: "IP",
-                        description:
-                            "IP address that you want to associate this domain with",
-                        placeholder: "127.0.0.1",
-                    },
-                    label: {
-                        label: "Label",
-                        description: "Optional label",
-                        placeholder: "An example domain",
-                    },
-                }}
+                fieldConfigs={fieldConfigs}
             />
         </>
     ) : (

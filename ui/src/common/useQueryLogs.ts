@@ -19,5 +19,5 @@ export const useQueryLogs = (filterFn?: (query: Query) => boolean) => {
         return filterFn ? rawData?.filter(filterFn) : rawData;
     }, [rawData]);
 
-    return [isPending, error, data] as const;
+    return { isPending, error, data };
 };
